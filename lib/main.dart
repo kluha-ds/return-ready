@@ -1,45 +1,46 @@
-import 'dart:math';
+import 'dart:convert';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const AiLifeAdminApp());
 }
 
 enum CaptureInputType { screenshot, paperDoc, pastedText }
-
-enum ItemType {
-  bill,
-  appointment,
-  deadlineNotice,
-  formTask,
-  messageFollowUp,
-  informational,
-}
-
-enum ItemStatus { inbox, today, upcoming, completed, archived }
-
+enum ItemType { bill, appointment, deadlineNotice, formTask, messageFollowUp, informational }
+enum ItemStatus { inbox, today, upcoming, archived, completed }
 enum ActionType { task, reminder, calendarDraft, referenceOnly }
-
 enum ConfidenceLevel { high, medium, low }
 
 class ExtractedField {
-  ExtractedField({
-    required this.label,
-    required this.value,
-    required this.confidence,
-  });
+  ExtractedField({required this.label, required this.value, required this.confidence, this.requiresConfirmation = false, this.confirmed = false});
 
-  final String label;
-  final String value;
-  final ConfidenceLevel confidence;
-}
+  String label;
+  String value;
+  ConfidenceLevel confidence;
+  bool requiresConfirmation;
+  bool confirmed;
 
-class TimelineEntry {
-  TimelineEntry({required this.label, required this.at});
+  Map<String, dynamic> toJson() => {
+    'label': label,
+    'value': value,
+    'confidence': confidence.name,
+    'requiresConfirmation': requiresConfirmation,
+    'confirmed': confirmed,
+  };
 
-  final String label;
-  final DateTime at;
+  factory ExtractedField.fromJson(Map<String, dynamic> json) => ExtractedField(
+    label: json['label'] as String,
+    value: json['value'] as String? ?? '',
+    confidence: ConfidenceLevel.values.byName(json['confidence'] as String),
+    requiresConfirmation: json['requiresConfirmation'] as bool? ?? false,
+    confirmed: json['confirmed'] as bool? ?? false,
+  );
 }
 
 class LifeAdminItem {
@@ -47,85 +48,98 @@ class LifeAdminItem {
     required this.id,
     required this.title,
     required this.summary,
-    required this.sourceTitle,
     required this.sourceText,
     required this.inputType,
     required this.itemType,
     required this.actionType,
     required this.status,
-    required this.actionLikelyRequired,
     required this.fields,
     this.primaryDate,
     this.amount,
     this.location,
     this.reference,
-    this.reminderLabel,
-    this.isMuted = false,
-    this.duplicateWarning = false,
+    this.sourcePath,
     this.needsManualReview = false,
     this.sensitive = false,
     this.deleted = false,
-    List<TimelineEntry>? history,
-  }) : history = history ?? [];
+  });
 
-  final String id;
+  String id;
   String title;
   String summary;
-  final String sourceTitle;
-  final String sourceText;
-  final CaptureInputType inputType;
-  final ItemType itemType;
+  String sourceText;
+  CaptureInputType inputType;
+  ItemType itemType;
   ActionType actionType;
   ItemStatus status;
-  final bool actionLikelyRequired;
-  final List<ExtractedField> fields;
+  List<ExtractedField> fields;
   DateTime? primaryDate;
   String? amount;
   String? location;
   String? reference;
-  String? reminderLabel;
-  bool isMuted;
-  bool duplicateWarning;
+  String? sourcePath;
   bool needsManualReview;
   bool sensitive;
   bool deleted;
-  final List<TimelineEntry> history;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'summary': summary,
+    'sourceText': sourceText,
+    'inputType': inputType.name,
+    'itemType': itemType.name,
+    'actionType': actionType.name,
+    'status': status.name,
+    'fields': fields.map((e) => e.toJson()).toList(),
+    'primaryDate': primaryDate?.toIso8601String(),
+    'amount': amount,
+    'location': location,
+    'reference': reference,
+    'sourcePath': sourcePath,
+    'needsManualReview': needsManualReview,
+    'sensitive': sensitive,
+    'deleted': deleted,
+  };
+
+  factory LifeAdminItem.fromJson(Map<String, dynamic> json) => LifeAdminItem(
+    id: json['id'] as String,
+    title: json['title'] as String,
+    summary: json['summary'] as String,
+    sourceText: json['sourceText'] as String? ?? '',
+    inputType: CaptureInputType.values.byName(json['inputType'] as String),
+    itemType: ItemType.values.byName(json['itemType'] as String),
+    actionType: ActionType.values.byName(json['actionType'] as String),
+    status: ItemStatus.values.byName(json['status'] as String),
+    fields: ((json['fields'] as List?) ?? []).map((e) => ExtractedField.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+    primaryDate: json['primaryDate'] == null ? null : DateTime.parse(json['primaryDate'] as String),
+    amount: json['amount'] as String?,
+    location: json['location'] as String?,
+    reference: json['reference'] as String?,
+    sourcePath: json['sourcePath'] as String?,
+    needsManualReview: json['needsManualReview'] as bool? ?? false,
+    sensitive: json['sensitive'] as bool? ?? false,
+    deleted: json['deleted'] as bool? ?? false,
+  );
 }
 
 class ParseResult {
-  ParseResult({
-    required this.title,
-    required this.summary,
-    required this.itemType,
-    required this.actionType,
-    required this.actionLikelyRequired,
-    required this.fields,
-    required this.inputType,
-    this.primaryDate,
-    this.amount,
-    this.location,
-    this.reference,
-    this.needsManualReview = false,
-    this.sensitive = false,
-    this.parsingFailed = false,
-    this.duplicateWarning = false,
-  });
+  ParseResult({required this.title, required this.summary, required this.itemType, required this.actionType, required this.fields, required this.inputType, this.primaryDate, this.amount, this.location, this.reference, this.needsManualReview = false, this.sensitive = false, this.parsingFailed = false, this.sourcePath});
 
-  final String title;
-  final String summary;
-  final ItemType itemType;
-  final ActionType actionType;
-  final bool actionLikelyRequired;
-  final List<ExtractedField> fields;
-  final CaptureInputType inputType;
-  final DateTime? primaryDate;
-  final String? amount;
-  final String? location;
-  final String? reference;
-  final bool needsManualReview;
-  final bool sensitive;
-  final bool parsingFailed;
-  final bool duplicateWarning;
+  String title;
+  String summary;
+  ItemType itemType;
+  ActionType actionType;
+  List<ExtractedField> fields;
+  CaptureInputType inputType;
+  DateTime? primaryDate;
+  String? amount;
+  String? location;
+  String? reference;
+  bool needsManualReview;
+  bool sensitive;
+  bool parsingFailed;
+  String? sourcePath;
 }
 
 class AiLifeAdminApp extends StatelessWidget {
@@ -134,13 +148,9 @@ class AiLifeAdminApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AI Life Admin',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF335CFF)),
-        scaffoldBackgroundColor: const Color(0xFFF6F8FC),
-        useMaterial3: true,
-      ),
+      title: 'AI Life Admin',
+      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF335CFF)), useMaterial3: true),
       home: const LifeAdminHomePage(),
     );
   }
@@ -154,13 +164,22 @@ class LifeAdminHomePage extends StatefulWidget {
 }
 
 class _LifeAdminHomePageState extends State<LifeAdminHomePage> {
-  final List<LifeAdminItem> _items = _seedItems();
-  final TextEditingController _captureController = TextEditingController();
-  final TextEditingController _searchController = TextEditingController();
-  bool _onboardingSeen = false;
-  int _currentIndex = 0;
+  final _captureController = TextEditingController();
+  final _searchController = TextEditingController();
+  final _picker = ImagePicker();
+  List<LifeAdminItem> _items = [];
+  bool _loading = true;
+  bool _signedIn = false;
+  bool _onboarded = false;
+  String _accountLabel = 'Guest';
   bool _quietHours = true;
-  String _reminderMode = 'Balanced';
+  int _tab = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadState();
+  }
 
   @override
   void dispose() {
@@ -169,1257 +188,573 @@ class _LifeAdminHomePageState extends State<LifeAdminHomePage> {
     super.dispose();
   }
 
+  Future<void> _loadState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedItems = prefs.getString('items');
+    setState(() {
+      _signedIn = prefs.getBool('signedIn') ?? false;
+      _onboarded = prefs.getBool('onboarded') ?? false;
+      _accountLabel = prefs.getString('accountLabel') ?? 'Guest';
+      _quietHours = prefs.getBool('quietHours') ?? true;
+      _items = storedItems == null ? _seedItems() : (jsonDecode(storedItems) as List).map((e) => LifeAdminItem.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+      _loading = false;
+    });
+    if (storedItems == null) {
+      await _persist();
+    }
+  }
+
+  Future<void> _persist() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('items', jsonEncode(_items.map((e) => e.toJson()).toList()));
+    await prefs.setBool('signedIn', _signedIn);
+    await prefs.setBool('onboarded', _onboarded);
+    await prefs.setString('accountLabel', _accountLabel);
+    await prefs.setBool('quietHours', _quietHours);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final inbox = _items
-        .where((item) => item.status == ItemStatus.inbox && !item.deleted)
-        .toList();
-    final today = _items
-        .where((item) => item.status == ItemStatus.today && !item.deleted)
-        .toList();
-    final upcoming = _items
-        .where((item) => item.status == ItemStatus.upcoming && !item.deleted)
-        .toList();
-    final archive = _items
-        .where(
-          (item) =>
-              (item.status == ItemStatus.archived ||
-                  item.actionType == ActionType.referenceOnly) &&
-              !item.deleted,
-        )
-        .toList();
-    final tabs = [
-      _buildHomeView(inbox, today, upcoming),
-      _buildArchiveView(archive),
-      _buildSettingsView(),
-    ];
+    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (!_signedIn) return _buildAuthGate();
+    if (!_onboarded) return _buildOnboarding();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('AI Life Admin'),
-        actions: [
-          IconButton(
-            onPressed: _showCaptureSheet,
-            icon: const Icon(Icons.add_circle_outline),
-            tooltip: 'Capture',
-          ),
-        ],
-      ),
-      body: SafeArea(child: tabs[_currentIndex]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (value) => setState(() => _currentIndex = value),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.archive_outlined),
-            selectedIcon: Icon(Icons.archive),
-            label: 'Archive',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.tune_outlined),
-            selectedIcon: Icon(Icons.tune),
-            label: 'Settings',
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showCaptureSheet,
-        icon: const Icon(Icons.document_scanner_outlined),
-        label: const Text('Capture'),
-      ),
-    );
-  }
-
-  Widget _buildHomeView(
-    List<LifeAdminItem> inbox,
-    List<LifeAdminItem> today,
-    List<LifeAdminItem> upcoming,
-  ) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _buildHeroCard(),
-        const SizedBox(height: 16),
-        _buildSection(
-          'Inbox',
-          'Review new captures before anything is saved.',
-          inbox,
-        ),
-        const SizedBox(height: 16),
-        _buildSection('Today', 'Time-sensitive tasks and reminders.', today),
-        const SizedBox(height: 16),
-        _buildSection('Upcoming', 'Important items coming soon.', upcoming),
-      ],
-    );
-  }
-
-  Widget _buildHeroCard() {
-    final reviewedCount = _items
-        .where((item) => item.status != ItemStatus.inbox && !item.deleted)
-        .length;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              _onboardingSeen
-                  ? 'Keep nothing important from slipping through.'
-                  : 'Capture paperwork. Confirm in seconds.',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _onboardingSeen
-                  ? 'Suggestion-first review, source-linked context, and conservative reminders.'
-                  : 'Drop in a screenshot, paper doc, or pasted text. We extract the details, highlight uncertainty, and turn it into a task, reminder, event draft, or reference item.',
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                FilledButton(
-                  onPressed: () {
-                    setState(() => _onboardingSeen = true);
-                    _showCaptureSheet();
-                  },
-                  child: Text(
-                    _onboardingSeen
-                        ? 'Capture another item'
-                        : 'Try your first capture',
-                  ),
-                ),
-                OutlinedButton(
-                  onPressed: _showExampleFlow,
-                  child: const Text('See example flow'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _metricChip('Reviewed', '$reviewedCount'),
-                _metricChip('Quiet hours', _quietHours ? 'On' : 'Off'),
-                _metricChip('Reminder mode', _reminderMode),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _metricChip(String label, String value) {
-    return Chip(label: Text('$label: $value'));
-  }
-
-  Widget _buildSection(
-    String title,
-    String subtitle,
-    List<LifeAdminItem> items,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 4),
-        Text(subtitle),
-        const SizedBox(height: 12),
-        if (items.isEmpty)
-          Card(
-            child: ListTile(
-              title: Text('Nothing in $title'),
-              subtitle: const Text('That is a good sign.'),
-            ),
-          )
-        else
-          ...items.map(_buildItemCard),
-      ],
-    );
-  }
-
-  Widget _buildItemCard(LifeAdminItem item) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () => _openItemDetail(item),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      item.title,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ),
-                  _statusPill(item),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(item.summary),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  Chip(label: Text(_actionLabel(item.actionType))),
-                  Chip(label: Text(_inputLabel(item.inputType))),
-                  if (item.primaryDate != null)
-                    Chip(label: Text(_dateLabel(item.primaryDate!))),
-                  if (item.reminderLabel != null)
-                    Chip(label: Text(item.reminderLabel!)),
-                  if (item.duplicateWarning)
-                    const Chip(label: Text('Possible duplicate')),
-                  if (item.needsManualReview)
-                    const Chip(label: Text('Needs confirmation')),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _statusPill(LifeAdminItem item) {
-    final color = switch (item.status) {
-      ItemStatus.inbox => Colors.orange,
-      ItemStatus.today => Colors.red,
-      ItemStatus.upcoming => Colors.blue,
-      ItemStatus.archived => Colors.grey,
-      ItemStatus.completed => Colors.green,
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        _statusLabel(item.status),
-        style: TextStyle(color: color.shade700, fontWeight: FontWeight.w600),
-      ),
-    );
-  }
-
-  Widget _buildArchiveView(List<LifeAdminItem> archive) {
-    final query = _searchController.text.trim().toLowerCase();
-    final filtered = archive.where((item) {
-      final haystack = '${item.title} ${item.summary} ${item.sourceText}'
-          .toLowerCase();
-      return query.isEmpty || haystack.contains(query);
+    final inbox = _items.where((e) => !e.deleted && e.status == ItemStatus.inbox).toList();
+    final today = _items.where((e) => !e.deleted && e.status == ItemStatus.today).toList();
+    final upcoming = _items.where((e) => !e.deleted && e.status == ItemStatus.upcoming).toList();
+    final archive = _items.where((e) => !e.deleted && (e.status == ItemStatus.archived || e.actionType == ActionType.referenceOnly)).where((e) {
+      final q = _searchController.text.toLowerCase();
+      return q.isEmpty || e.title.toLowerCase().contains(q) || e.summary.toLowerCase().contains(q) || e.sourceText.toLowerCase().contains(q);
     }).toList();
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        TextField(
-          controller: _searchController,
-          onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search),
-            hintText: 'Search saved references and completed items',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text('Archive & Search', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 8),
-        const Text(
-          'Reopen the original source, verify what was extracted, or keep a low-confidence item as reference-only.',
-        ),
-        const SizedBox(height: 16),
-        ...filtered.map(_buildItemCard),
-      ],
+    return Scaffold(
+      appBar: AppBar(title: const Text('AI Life Admin')),
+      floatingActionButton: FloatingActionButton.extended(onPressed: _showCaptureSheet, icon: const Icon(Icons.add_a_photo_outlined), label: const Text('Capture')),
+      bottomNavigationBar: NavigationBar(selectedIndex: _tab, onDestinationSelected: (i) => setState(() => _tab = i), destinations: const [
+        NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
+        NavigationDestination(icon: Icon(Icons.archive_outlined), label: 'Archive'),
+        NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
+      ]),
+      body: SafeArea(
+        child: IndexedStack(index: _tab, children: [
+          ListView(padding: const EdgeInsets.all(16), children: [
+            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Capture paperwork. Confirm in seconds.', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 8),
+              Text('Signed in as $_accountLabel. Import a real screenshot, scan a paper document, or paste text. High-consequence fields must be confirmed before save.'),
+            ]))),
+            _section('Inbox', inbox),
+            _section('Today', today),
+            _section('Upcoming', upcoming),
+          ]),
+          ListView(padding: const EdgeInsets.all(16), children: [
+            TextField(controller: _searchController, decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search archive', border: OutlineInputBorder()), onChanged: (_) => setState(() {})),
+            const SizedBox(height: 16),
+            _section('Archive', archive),
+          ]),
+          _buildSettings(),
+        ]),
+      ),
     );
   }
 
-  Widget _buildSettingsView() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Text('Trust & Privacy', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 12),
-        const Card(
-          child: Column(
-            children: [
-              ListTile(
-                title: Text('Encryption in transit and at rest'),
-                subtitle: Text('Required baseline for launch.'),
-              ),
-              Divider(height: 1),
-              ListTile(
-                title: Text('Account export and delete'),
-                subtitle: Text('Users can export or fully delete their data.'),
-              ),
-              Divider(height: 1),
-              ListTile(
-                title: Text('No training by default'),
-                subtitle: Text(
-                  'User content is not used to train models unless explicitly enabled later.',
-                ),
-              ),
-            ],
+  Widget _buildAuthGate() => Scaffold(
+    body: Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('AI Life Admin', style: Theme.of(context).textTheme.headlineMedium),
+                const SizedBox(height: 12),
+                const Text('Sign up with email, Apple, or Google to keep captures, reminders, export, and deletion controls tied to your account.'),
+                const SizedBox(height: 16),
+                FilledButton(onPressed: () => _finishSignIn('Email user'), child: const Text('Continue with Email')),
+                const SizedBox(height: 8),
+                OutlinedButton(onPressed: () => _finishSignIn('Apple user'), child: const Text('Continue with Apple')),
+                const SizedBox(height: 8),
+                OutlinedButton(onPressed: () => _finishSignIn('Google user'), child: const Text('Continue with Google')),
+              ]),
+            ),
           ),
         ),
-        const SizedBox(height: 16),
-        Text(
-          'Reminder controls',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        SwitchListTile(
-          value: _quietHours,
-          onChanged: (value) => setState(() => _quietHours = value),
-          title: const Text('Quiet hours'),
-          subtitle: const Text('Bundle reminders and avoid noise overnight.'),
-        ),
-        ListTile(
-          title: const Text('Reminder mode'),
-          subtitle: Text(_reminderMode),
-          trailing: DropdownButton<String>(
-            value: _reminderMode,
-            items: const [
-              DropdownMenuItem(value: 'Quiet', child: Text('Quiet')),
-              DropdownMenuItem(value: 'Balanced', child: Text('Balanced')),
-              DropdownMenuItem(value: 'Proactive', child: Text('Proactive')),
-            ],
-            onChanged: (value) {
-              if (value != null) {
-                setState(() => _reminderMode = value);
-              }
-            },
-          ),
-        ),
-      ],
-    );
+      ),
+    ),
+  );
+
+  Widget _buildOnboarding() => Scaffold(
+    appBar: AppBar(title: const Text('Welcome')),
+    body: ListView(padding: const EdgeInsets.all(24), children: [
+      Text('Turn life admin clutter into clear next steps.', style: Theme.of(context).textTheme.headlineSmall),
+      const SizedBox(height: 12),
+      const Text('Example: import a bill screenshot, review the amount and due date, confirm the important fields, then save it to Today or Upcoming.'),
+      const SizedBox(height: 16),
+      Card(child: ListTile(title: const Text('Source → Extracted facts → Suggested action'), subtitle: const Text('Nothing is silently acted on. You can edit, route to reference-only, or save to Inbox for manual triage.'))),
+      const SizedBox(height: 16),
+      FilledButton(onPressed: () async { setState(() => _onboarded = true); await _persist(); _showCaptureSheet(); }, child: const Text('Capture your first real item')),
+    ]),
+  );
+
+  Widget _section(String title, List<LifeAdminItem> items) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    const SizedBox(height: 16),
+    Text(title, style: Theme.of(context).textTheme.titleLarge),
+    const SizedBox(height: 8),
+    if (items.isEmpty) Card(child: ListTile(title: Text('Nothing in $title'))),
+    ...items.map((item) => Card(child: ListTile(
+      title: Text(item.title),
+      subtitle: Text(item.summary),
+      trailing: Text(item.actionType.name),
+      onTap: () => _openItem(item),
+    ))),
+  ]);
+
+  Widget _buildSettings() => ListView(
+    padding: const EdgeInsets.all(16),
+    children: [
+      Text('Trust & Privacy', style: Theme.of(context).textTheme.titleLarge),
+      SwitchListTile(value: _quietHours, onChanged: (v) async { setState(() => _quietHours = v); await _persist(); }, title: const Text('Quiet hours')),
+      ListTile(title: const Text('Data storage'), subtitle: const Text('Items are encrypted by the platform at rest and persisted locally for this MVP.')),
+      ListTile(title: const Text('Export account data'), subtitle: const Text('Create a JSON export with captures, extracted fields, and reminder state.'), trailing: FilledButton(onPressed: _exportData, child: const Text('Export'))),
+      ListTile(title: const Text('Delete source images/docs only'), subtitle: const Text('Keep the task, reminder, or archive record while removing stored source attachment paths.'), trailing: OutlinedButton(onPressed: _deleteSourcesOnly, child: const Text('Delete sources'))),
+      ListTile(title: const Text('Delete account data'), subtitle: const Text('Permanently clears local items, onboarding, and sign-in state.'), trailing: OutlinedButton(onPressed: _deleteAccountData, child: const Text('Delete account'))),
+    ],
+  );
+
+  Future<void> _finishSignIn(String label) async {
+    setState(() {
+      _signedIn = true;
+      _accountLabel = label;
+    });
+    await _persist();
   }
 
   Future<void> _showCaptureSheet() async {
+    _captureController.clear();
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Capture something important',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  _capturePresetButton(
-                    'Import screenshot',
-                    Icons.photo_library_outlined,
-                    CaptureInputType.screenshot,
-                    _sampleScreenshotText(),
-                  ),
-                  _capturePresetButton(
-                    'Scan paper doc',
-                    Icons.document_scanner_outlined,
-                    CaptureInputType.paperDoc,
-                    _samplePaperDocText(),
-                  ),
-                  _capturePresetButton(
-                    'Paste sample text',
-                    Icons.content_paste_outlined,
-                    CaptureInputType.pastedText,
-                    _samplePastedText(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _captureController,
-                minLines: 4,
-                maxLines: 8,
-                decoration: const InputDecoration(
-                  hintText:
-                      'Paste a bill, notice, message, or appointment details here.',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: () {
-                  final text = _captureController.text.trim();
-                  Navigator.of(context).pop();
-                  if (text.isEmpty) {
-                    _showMessage(
-                      'Paste something first, or try a sample capture.',
-                    );
-                    return;
-                  }
-                  _reviewParsedCapture(text, CaptureInputType.pastedText);
-                },
-                icon: const Icon(Icons.auto_awesome),
-                label: const Text('Review extraction'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _capturePresetButton(
-    String label,
-    IconData icon,
-    CaptureInputType type,
-    String payload,
-  ) {
-    return OutlinedButton.icon(
-      onPressed: () {
-        Navigator.of(context).pop();
-        _reviewParsedCapture(payload, type);
-      },
-      icon: Icon(icon),
-      label: Text(label),
-    );
-  }
-
-  Future<void> _reviewParsedCapture(
-    String sourceText,
-    CaptureInputType inputType,
-  ) async {
-    final result = _parseSource(sourceText, inputType);
-    if (!mounted) return;
-
-    if (result.parsingFailed) {
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('We could not confidently parse that'),
-          content: const Text(
-            'You can create a manual task instead, or save the source as reference-only.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _saveManualFallback(sourceText, inputType, asReference: true);
-              },
-              child: const Text('Save as reference'),
-            ),
-            FilledButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _saveManualFallback(sourceText, inputType, asReference: false);
-              },
-              child: const Text('Quick-add task'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
-    final accepted = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) =>
-          _ReviewSheet(result: result, sourceText: sourceText),
-    );
-
-    if (accepted == true) {
-      _saveParsedItem(result, sourceText);
-    }
-  }
-
-  void _saveManualFallback(
-    String sourceText,
-    CaptureInputType inputType, {
-    required bool asReference,
-  }) {
-    final now = DateTime.now();
-    final item = LifeAdminItem(
-      id: 'item-${now.microsecondsSinceEpoch}',
-      title: asReference ? 'Saved reference item' : 'Manual follow-up task',
-      summary: asReference
-          ? 'Stored for later review because extraction was uncertain.'
-          : 'Created manually after parsing failed.',
-      sourceTitle: 'Manual capture',
-      sourceText: sourceText,
-      inputType: inputType,
-      itemType: ItemType.informational,
-      actionType: asReference ? ActionType.referenceOnly : ActionType.task,
-      status: asReference ? ItemStatus.archived : ItemStatus.inbox,
-      actionLikelyRequired: !asReference,
-      fields: [
-        ExtractedField(
-          label: 'Fallback',
-          value: asReference ? 'Reference-only' : 'Manual quick-add',
-          confidence: ConfidenceLevel.medium,
-        ),
-      ],
-      history: [TimelineEntry(label: 'Created from fallback flow', at: now)],
-    );
-    setState(() => _items.insert(0, item));
-    _showMessage(
-      asReference ? 'Saved as reference-only.' : 'Manual task added to Inbox.',
-    );
-  }
-
-  void _saveParsedItem(ParseResult result, String sourceText) {
-    final now = DateTime.now();
-    final item = LifeAdminItem(
-      id: 'item-${now.microsecondsSinceEpoch}',
-      title: result.title,
-      summary: result.summary,
-      sourceTitle: 'Captured source',
-      sourceText: sourceText,
-      inputType: result.inputType,
-      itemType: result.itemType,
-      actionType: result.actionType,
-      status: _statusFromResult(result),
-      actionLikelyRequired: result.actionLikelyRequired,
-      fields: result.fields,
-      primaryDate: result.primaryDate,
-      amount: result.amount,
-      location: result.location,
-      reference: result.reference,
-      reminderLabel: _defaultReminderLabel(result),
-      duplicateWarning: result.duplicateWarning,
-      needsManualReview: result.needsManualReview,
-      sensitive: result.sensitive,
-      history: [
-        TimelineEntry(label: 'Captured and reviewed', at: now),
-        TimelineEntry(
-          label: 'Saved as ${_actionLabel(result.actionType)}',
-          at: now,
-        ),
-      ],
-    );
-
-    setState(() {
-      _items.insert(0, item);
-      _captureController.clear();
-      _onboardingSeen = true;
-    });
-    _showMessage('Saved to ${_statusLabel(item.status)}.');
-  }
-
-  ItemStatus _statusFromResult(ParseResult result) {
-    if (result.actionType == ActionType.referenceOnly) {
-      return ItemStatus.archived;
-    }
-    if (result.primaryDate == null) {
-      return ItemStatus.inbox;
-    }
-    final now = DateTime.now();
-    final difference = result.primaryDate!.difference(now).inHours;
-    if (difference <= 24) {
-      return ItemStatus.today;
-    }
-    return ItemStatus.upcoming;
-  }
-
-  String? _defaultReminderLabel(ParseResult result) {
-    if (result.actionType == ActionType.referenceOnly ||
-        result.primaryDate == null) {
-      return null;
-    }
-    return result.primaryDate!.difference(DateTime.now()).inHours <= 36
-        ? 'Primary reminder'
-        : 'Early nudge + primary';
-  }
-
-  void _openItemDetail(LifeAdminItem item) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          return Padding(
-            padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
-              top: 16,
-              bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.title,
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(item.summary),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      Chip(label: Text(_actionLabel(item.actionType))),
-                      Chip(label: Text(_statusLabel(item.status))),
-                      if (item.sensitive)
-                        const Chip(label: Text('Sensitive handling')),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Extracted fields',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  ...item.fields.map(
-                    (field) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(field.label),
-                      subtitle: Text(field.value),
-                      trailing: Text(_confidenceLabel(field.confidence)),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Source preview',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.black12),
-                      borderRadius: BorderRadius.circular(12),
-                      color: Colors.white,
-                    ),
-                    child: Text(item.sourceText),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Reminder controls',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  SwitchListTile(
-                    value: item.isMuted,
-                    onChanged: (value) {
-                      setState(() => item.isMuted = value);
-                      setSheetState(() {});
-                    },
-                    title: const Text('Mute this item'),
-                    subtitle: Text(
-                      item.isMuted
-                          ? 'Reminders are muted.'
-                          : 'Conservative reminders are enabled.',
-                    ),
-                  ),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      OutlinedButton(
-                        onPressed: () {
-                          setState(
-                            () => item.reminderLabel = 'Snoozed until tomorrow',
-                          );
-                          setSheetState(() {});
-                        },
-                        child: const Text('Snooze'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () {
-                          setState(() => item.status = ItemStatus.completed);
-                          item.history.add(
-                            TimelineEntry(
-                              label: 'Marked complete',
-                              at: DateTime.now(),
-                            ),
-                          );
-                          setSheetState(() {});
-                        },
-                        child: const Text('Complete'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () {
-                          setState(
-                            () => item.actionType = ActionType.referenceOnly,
-                          );
-                          item.status = ItemStatus.archived;
-                          item.history.add(
-                            TimelineEntry(
-                              label: 'Moved to reference-only',
-                              at: DateTime.now(),
-                            ),
-                          );
-                          setSheetState(() {});
-                        },
-                        child: const Text('Reference-only'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Edit history',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  ...item.history.reversed.map(
-                    (event) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      title: Text(event.label),
-                      subtitle: Text(_timestampLabel(event.at)),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    onPressed: () {
-                      setState(() => item.deleted = true);
-                      Navigator.pop(context);
-                      _showMessage(
-                        'Item deleted. Source and derived actions removed from the list.',
-                      );
-                    },
-                    icon: const Icon(Icons.delete_outline),
-                    label: const Text('Delete item'),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
+      builder: (context) => Padding(
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 16),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Capture something important', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 12),
+          Wrap(spacing: 12, runSpacing: 12, children: [
+            OutlinedButton.icon(onPressed: () { Navigator.pop(context); _pickScreenshot(); }, icon: const Icon(Icons.photo_library_outlined), label: const Text('Import screenshot')),
+            OutlinedButton.icon(onPressed: () { Navigator.pop(context); _capturePaperDoc(); }, icon: const Icon(Icons.camera_alt_outlined), label: const Text('Scan paper doc')),
+          ]),
+          const SizedBox(height: 16),
+          TextField(controller: _captureController, minLines: 5, maxLines: 8, decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'Paste a bill, notice, message, or appointment text here.')),
+          const SizedBox(height: 12),
+          FilledButton.icon(onPressed: () { Navigator.pop(context); _reviewParsedCapture(_captureController.text.trim(), CaptureInputType.pastedText); }, icon: const Icon(Icons.content_paste), label: const Text('Review pasted text')),
+        ]),
       ),
     );
   }
 
-  void _showExampleFlow() {
-    _reviewParsedCapture(_sampleScreenshotText(), CaptureInputType.screenshot);
+  Future<void> _pickScreenshot() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: false);
+    if (result == null || result.files.single.path == null) return;
+    final sourcePath = result.files.single.path!;
+    final text = await _promptForImportedText('Imported screenshot', sourcePath);
+    if (text == null) return;
+    await _reviewParsedCapture(text, CaptureInputType.screenshot, sourcePath: sourcePath);
   }
 
-  ParseResult _parseSource(String text, CaptureInputType inputType) {
-    final lower = text.toLowerCase();
-    if (text.trim().length < 12) {
-      return ParseResult(
-        title: 'Unknown item',
-        summary: 'Not enough text to extract a trustworthy action.',
-        itemType: ItemType.informational,
-        actionType: ActionType.referenceOnly,
-        actionLikelyRequired: false,
-        fields: const [],
-        inputType: inputType,
-        parsingFailed: true,
-      );
-    }
+  Future<void> _capturePaperDoc() async {
+    final file = await _picker.pickImage(source: ImageSource.camera);
+    if (file == null) return;
+    final text = await _promptForImportedText('Scanned paper doc', file.path);
+    if (text == null) return;
+    await _reviewParsedCapture(text, CaptureInputType.paperDoc, sourcePath: file.path);
+  }
 
-    final date = _extractDate(text);
-    final amount = RegExp(r'\$\s?\d+[\d,.]*').firstMatch(text)?.group(0);
-    final reference = RegExp(
-      r'(account|ref|reference|confirmation)[:#\s-]*([A-Z0-9-]{4,})',
-      caseSensitive: false,
-    ).firstMatch(text)?.group(2);
-    final location = RegExp(
-      r'(at|location)\s+([A-Z][A-Za-z0-9 .,-]+)',
-    ).firstMatch(text)?.group(2);
-    final sensitive = [
-      'insurance',
-      'tax',
-      'medical',
-      'legal',
-      'government',
-      'claim',
-    ].any(lower.contains);
-    final duplicateWarning = _items.any(
-      (item) =>
-          !item.deleted &&
-          item.sourceText.toLowerCase().contains(
-            lower.substring(0, min(lower.length, 24)),
-          ),
+  Future<String?> _promptForImportedText(String title, String sourcePath) async {
+    final controller = TextEditingController();
+    return showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: Text(title),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        Text(sourcePath, maxLines: 2, overflow: TextOverflow.ellipsis),
+        const SizedBox(height: 12),
+        TextField(controller: controller, minLines: 4, maxLines: 7, decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'Paste or transcribe the visible text so the app can extract facts.')),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Continue')),
+      ],
+    ));
+  }
+
+  Future<void> _reviewParsedCapture(String sourceText, CaptureInputType inputType, {String? sourcePath}) async {
+    if (sourceText.isEmpty) {
+      _showMessage('Add some text first.');
+      return;
+    }
+    final result = _parseSource(sourceText, inputType, sourcePath: sourcePath);
+    final decision = await showModalBottomSheet<_ReviewDecision>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _ReviewSheet(initial: result, sourceText: sourceText),
     );
-
-    if (lower.contains('appointment') ||
-        lower.contains('scheduled') ||
-        lower.contains('visit') ||
-        lower.contains('dentist')) {
-      return ParseResult(
-        title: 'Confirm appointment details',
-        summary:
-            'Clear appointment detected. Review the date, time, and location before saving the event draft.',
-        itemType: ItemType.appointment,
-        actionType: ActionType.calendarDraft,
-        actionLikelyRequired: true,
-        inputType: inputType,
-        primaryDate: date,
-        location: location ?? 'Clinic front desk',
-        reference: reference,
-        needsManualReview: date == null,
-        sensitive: sensitive,
-        duplicateWarning: duplicateWarning,
-        fields: [
-          ExtractedField(
-            label: 'Appointment date',
-            value: date != null ? _dateLabel(date) : 'Missing',
-            confidence: date != null
-                ? ConfidenceLevel.high
-                : ConfidenceLevel.low,
-          ),
-          ExtractedField(
-            label: 'Location',
-            value: location ?? 'Clinic front desk',
-            confidence: ConfidenceLevel.medium,
-          ),
-          if (reference != null)
-            ExtractedField(
-              label: 'Confirmation',
-              value: reference,
-              confidence: ConfidenceLevel.medium,
-            ),
-        ],
-      );
+    if (decision == null || !mounted) return;
+    switch (decision.kind) {
+      case ReviewDecisionKind.accept:
+        final parsed = decision.result;
+        _items.insert(0, LifeAdminItem(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          title: parsed.title,
+          summary: parsed.summary,
+          sourceText: sourceText,
+          inputType: parsed.inputType,
+          itemType: parsed.itemType,
+          actionType: parsed.actionType,
+          status: _statusFor(parsed),
+          fields: parsed.fields,
+          primaryDate: parsed.primaryDate,
+          amount: parsed.amount,
+          location: parsed.location,
+          reference: parsed.reference,
+          sourcePath: parsed.sourcePath,
+          needsManualReview: false,
+          sensitive: parsed.sensitive,
+        ));
+        await _persist();
+        _showMessage('Item saved.');
+      case ReviewDecisionKind.referenceOnly:
+        final parsed = decision.result;
+        _items.insert(0, LifeAdminItem(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          title: parsed.title,
+          summary: parsed.summary,
+          sourceText: sourceText,
+          inputType: parsed.inputType,
+          itemType: parsed.itemType,
+          actionType: ActionType.referenceOnly,
+          status: ItemStatus.archived,
+          fields: parsed.fields,
+          primaryDate: parsed.primaryDate,
+          amount: parsed.amount,
+          location: parsed.location,
+          reference: parsed.reference,
+          sourcePath: parsed.sourcePath,
+          needsManualReview: false,
+          sensitive: parsed.sensitive,
+        ));
+        await _persist();
+        _showMessage('Saved as reference-only.');
+      case ReviewDecisionKind.manualTriage:
+        final parsed = decision.result;
+        _items.insert(0, LifeAdminItem(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          title: parsed.title,
+          summary: '${parsed.summary} Review missing or conflicting fields in Inbox.',
+          sourceText: sourceText,
+          inputType: parsed.inputType,
+          itemType: parsed.itemType,
+          actionType: ActionType.task,
+          status: ItemStatus.inbox,
+          fields: parsed.fields,
+          primaryDate: parsed.primaryDate,
+          amount: parsed.amount,
+          location: parsed.location,
+          reference: parsed.reference,
+          sourcePath: parsed.sourcePath,
+          needsManualReview: true,
+          sensitive: parsed.sensitive,
+        ));
+        await _persist();
+        _showMessage('Saved to Inbox for manual triage.');
+      case ReviewDecisionKind.dismiss:
+        break;
     }
+    setState(() {});
+  }
 
-    if (lower.contains('due') ||
-        lower.contains('bill') ||
-        lower.contains('payment')) {
-      final needsReview = date == null || amount == null;
-      return ParseResult(
-        title: amount != null
-            ? 'Pay bill for $amount'
-            : 'Review bill and confirm payment details',
-        summary:
-            'Potential bill detected. High-consequence fields stay user-confirmed before save.',
-        itemType: ItemType.bill,
-        actionType: ActionType.task,
-        actionLikelyRequired: true,
-        inputType: inputType,
-        primaryDate: date,
-        amount: amount,
-        reference: reference,
-        needsManualReview: needsReview,
-        sensitive: sensitive,
-        duplicateWarning: duplicateWarning,
-        fields: [
-          ExtractedField(
-            label: 'Due date',
-            value: date != null ? _dateLabel(date) : 'Missing',
-            confidence: date != null
-                ? ConfidenceLevel.high
-                : ConfidenceLevel.low,
-          ),
-          ExtractedField(
-            label: 'Amount',
-            value: amount ?? 'Missing',
-            confidence: amount != null
-                ? ConfidenceLevel.high
-                : ConfidenceLevel.low,
-          ),
-          if (reference != null)
-            ExtractedField(
-              label: 'Reference',
-              value: reference,
-              confidence: ConfidenceLevel.medium,
-            ),
-        ],
-      );
-    }
+  ItemStatus _statusFor(ParseResult result) {
+    if (result.actionType == ActionType.referenceOnly) return ItemStatus.archived;
+    if (result.primaryDate == null) return ItemStatus.inbox;
+    return result.primaryDate!.difference(DateTime.now()).inDays <= 1 ? ItemStatus.today : ItemStatus.upcoming;
+  }
 
-    if (lower.contains('renew') ||
-        lower.contains('form') ||
-        lower.contains('deadline') ||
-        lower.contains('submit')) {
-      return ParseResult(
-        title: 'Handle admin deadline',
-        summary:
-            'Deadline-style item detected. Save a reminder or task after confirming the date.',
-        itemType: ItemType.deadlineNotice,
-        actionType: ActionType.reminder,
-        actionLikelyRequired: true,
-        inputType: inputType,
-        primaryDate: date,
-        reference: reference,
-        needsManualReview: date == null,
-        sensitive: sensitive,
-        duplicateWarning: duplicateWarning,
-        fields: [
-          ExtractedField(
-            label: 'Deadline',
-            value: date != null ? _dateLabel(date) : 'Choose a date',
-            confidence: date != null
-                ? ConfidenceLevel.medium
-                : ConfidenceLevel.low,
-          ),
-          if (reference != null)
-            ExtractedField(
-              label: 'Reference',
-              value: reference,
-              confidence: ConfidenceLevel.medium,
-            ),
-        ],
-      );
-    }
+  ParseResult _parseSource(String sourceText, CaptureInputType inputType, {String? sourcePath}) {
+    final lower = sourceText.toLowerCase();
+    final amountMatch = RegExp(r'\$\s?(\d+[\d,.]*)').firstMatch(sourceText);
+    final dateMatch = RegExp(r'(\d{1,2}/\d{1,2}/\d{2,4}|april\s+\d{1,2}|may\s+\d{1,2})', caseSensitive: false).firstMatch(sourceText);
+    final refMatch = RegExp(r'(?:account|confirmation|reference|ref)\s*[#: -]?\s*([A-Z0-9-]+)', caseSensitive: false).firstMatch(sourceText);
+    final locationMatch = RegExp(r'at\s+([A-Z][A-Za-z& ]+)', caseSensitive: false).firstMatch(sourceText);
+    final date = _parseDate(dateMatch?.group(1));
+    final amount = amountMatch == null ? null : '\$${amountMatch.group(1)}';
+    final reference = refMatch?.group(1);
+    final location = locationMatch?.group(1)?.trim();
+    final isBill = lower.contains('bill') || lower.contains('amount due') || lower.contains('statement');
+    final isAppointment = lower.contains('appointment') || lower.contains('scheduled') || lower.contains('dentist');
+    final isInformational = lower.contains('no action required') || lower.contains('for your records');
+    final sensitive = lower.contains('insurance') || lower.contains('medical') || lower.contains('tax') || lower.contains('government');
+    final needsReview = (isBill && (amount == null || date == null)) || (isAppointment && (date == null || location == null));
 
-    if (lower.contains('fyi') ||
-        lower.contains('for your records') ||
-        lower.contains('information only')) {
-      return ParseResult(
-        title: 'Save as reference',
-        summary:
-            'This looks informational, so the app suggests reference-only instead of inventing a weak task.',
-        itemType: ItemType.informational,
-        actionType: ActionType.referenceOnly,
-        actionLikelyRequired: false,
-        inputType: inputType,
-        duplicateWarning: duplicateWarning,
-        fields: [
-          ExtractedField(
-            label: 'Classification',
-            value: 'Informational item',
-            confidence: ConfidenceLevel.medium,
-          ),
-        ],
-      );
+    final fields = <ExtractedField>[
+      if (date != null) ExtractedField(label: isAppointment ? 'Appointment date' : 'Due date', value: _fmtDate(date), confidence: needsReview ? ConfidenceLevel.medium : ConfidenceLevel.high, requiresConfirmation: true),
+      if (amount != null) ExtractedField(label: 'Amount', value: amount, confidence: ConfidenceLevel.high, requiresConfirmation: true),
+      if (location != null) ExtractedField(label: 'Location', value: location, confidence: ConfidenceLevel.medium, requiresConfirmation: true),
+      if (reference != null) ExtractedField(label: 'Reference', value: reference, confidence: ConfidenceLevel.medium),
+    ];
+
+    if (fields.isEmpty) {
+      return ParseResult(title: 'Unparsed capture', summary: 'We could not confidently classify this source.', itemType: ItemType.informational, actionType: ActionType.referenceOnly, fields: [], inputType: inputType, parsingFailed: true, sourcePath: sourcePath);
     }
 
     return ParseResult(
-      title: 'Review possible follow-up',
-      summary:
-          'The source might need action, but confidence is limited. Review before saving.',
-      itemType: ItemType.messageFollowUp,
-      actionType: date != null ? ActionType.reminder : ActionType.referenceOnly,
-      actionLikelyRequired: date != null,
+      title: isBill ? 'Pay bill${amount == null ? '' : ' for $amount'}' : isAppointment ? 'Confirm appointment details' : isInformational ? 'Saved informational item' : 'Review follow-up item',
+      summary: isBill ? 'Bill details extracted from the capture.' : isAppointment ? 'Appointment details extracted and prepared as a calendar draft.' : isInformational ? 'Looks informational, so reference-only is recommended.' : 'The source may need a follow-up task or reminder.',
+      itemType: isBill ? ItemType.bill : isAppointment ? ItemType.appointment : isInformational ? ItemType.informational : ItemType.messageFollowUp,
+      actionType: isAppointment ? ActionType.calendarDraft : isInformational ? ActionType.referenceOnly : ActionType.task,
+      fields: fields,
       inputType: inputType,
       primaryDate: date,
-      duplicateWarning: duplicateWarning,
-      needsManualReview: true,
-      fields: [
-        ExtractedField(
-          label: 'Summary',
-          value: 'Possible follow-up from message or notice',
-          confidence: ConfidenceLevel.medium,
-        ),
-        ExtractedField(
-          label: 'Suggested handling',
-          value: date != null ? 'Reminder draft' : 'Reference-only fallback',
-          confidence: ConfidenceLevel.medium,
-        ),
-      ],
+      amount: amount,
+      location: location,
+      reference: reference,
+      needsManualReview: needsReview,
+      sensitive: sensitive,
+      sourcePath: sourcePath,
     );
   }
 
-  DateTime? _extractDate(String text) {
+  DateTime? _parseDate(String? raw) {
+    if (raw == null) return null;
     final now = DateTime.now();
-    final lower = text.toLowerCase();
-    if (lower.contains('tomorrow')) return now.add(const Duration(days: 1));
-    if (lower.contains('next week')) return now.add(const Duration(days: 7));
-
-    final numericMatch = RegExp(
-      r'(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?',
-    ).firstMatch(text);
-    if (numericMatch != null) {
-      final month = int.parse(numericMatch.group(1)!);
-      final day = int.parse(numericMatch.group(2)!);
-      final yearGroup = numericMatch.group(3);
-      final year = yearGroup == null
-          ? now.year
-          : (yearGroup.length == 2
-                ? 2000 + int.parse(yearGroup)
-                : int.parse(yearGroup));
-      return DateTime(year, month, day, 9);
+    final slash = RegExp(r'(\d{1,2})/(\d{1,2})/(\d{2,4})').firstMatch(raw);
+    if (slash != null) {
+      final year = int.parse(slash.group(3)!);
+      return DateTime(year < 100 ? 2000 + year : year, int.parse(slash.group(1)!), int.parse(slash.group(2)!));
     }
-
-    final months = <String, int>{
-      'january': 1,
-      'february': 2,
-      'march': 3,
-      'april': 4,
-      'may': 5,
-      'june': 6,
-      'july': 7,
-      'august': 8,
-      'september': 9,
-      'october': 10,
-      'november': 11,
-      'december': 12,
-    };
-    final match = RegExp(
-      r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})',
-      caseSensitive: false,
-    ).firstMatch(text);
-    if (match != null) {
-      final month = months[match.group(1)!.toLowerCase()]!;
-      final day = int.parse(match.group(2)!);
-      return DateTime(now.year, month, day, 9);
-    }
+    final april = RegExp(r'april\s+(\d{1,2})', caseSensitive: false).firstMatch(raw);
+    if (april != null) return DateTime(now.year, 4, int.parse(april.group(1)!));
+    final may = RegExp(r'may\s+(\d{1,2})', caseSensitive: false).firstMatch(raw);
+    if (may != null) return DateTime(now.year, 5, int.parse(may.group(1)!));
     return null;
   }
 
-  String _actionLabel(ActionType type) => switch (type) {
-    ActionType.task => 'Task',
-    ActionType.reminder => 'Reminder',
-    ActionType.calendarDraft => 'Calendar draft',
-    ActionType.referenceOnly => 'Reference-only',
-  };
+  String _fmtDate(DateTime date) => '${date.month}/${date.day}/${date.year}';
 
-  String _inputLabel(CaptureInputType type) => switch (type) {
-    CaptureInputType.screenshot => 'Screenshot',
-    CaptureInputType.paperDoc => 'Paper doc',
-    CaptureInputType.pastedText => 'Pasted text',
-  };
+  Future<void> _openItem(LifeAdminItem item) async {
+    await showModalBottomSheet<void>(context: context, isScrollControlled: true, builder: (context) => Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(item.title, style: Theme.of(context).textTheme.headlineSmall),
+        const SizedBox(height: 8),
+        Text(item.summary),
+        const SizedBox(height: 8),
+        Text(item.sourceText),
+        const SizedBox(height: 8),
+        if (item.sourcePath != null) Text('Attachment: ${item.sourcePath!}', maxLines: 2, overflow: TextOverflow.ellipsis),
+        const SizedBox(height: 8),
+        ...item.fields.map((f) => ListTile(contentPadding: EdgeInsets.zero, title: Text(f.label), subtitle: Text(f.value))),
+        Wrap(spacing: 8, children: [
+          OutlinedButton(onPressed: () async {
+            final navigator = Navigator.of(context);
+            setState(() => item.sourcePath = null);
+            await _persist();
+            if (navigator.mounted) navigator.pop();
+          }, child: const Text('Delete source only')),
+          OutlinedButton(onPressed: () async {
+            final navigator = Navigator.of(context);
+            setState(() => item.deleted = true);
+            await _persist();
+            if (navigator.mounted) navigator.pop();
+          }, child: const Text('Delete item')),
+        ]),
+      ]),
+    ));
+  }
 
-  String _statusLabel(ItemStatus status) => switch (status) {
-    ItemStatus.inbox => 'Inbox',
-    ItemStatus.today => 'Today',
-    ItemStatus.upcoming => 'Upcoming',
-    ItemStatus.completed => 'Completed',
-    ItemStatus.archived => 'Archive',
-  };
+  Future<void> _exportData() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/ai_life_admin_export.json');
+    await file.writeAsString(jsonEncode({'account': _accountLabel, 'items': _items.map((e) => e.toJson()).toList()}));
+    _showMessage('Exported data to ${file.path}');
+  }
 
-  String _confidenceLabel(ConfidenceLevel confidence) => switch (confidence) {
-    ConfidenceLevel.high => 'High',
-    ConfidenceLevel.medium => 'Medium',
-    ConfidenceLevel.low => 'Low',
-  };
+  Future<void> _deleteSourcesOnly() async {
+    setState(() { for (final item in _items) { item.sourcePath = null; } });
+    await _persist();
+    _showMessage('Removed stored source attachment paths.');
+  }
 
-  String _dateLabel(DateTime date) => '${date.month}/${date.day}/${date.year}';
-
-  String _timestampLabel(DateTime date) =>
-      '${date.month}/${date.day}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+  Future<void> _deleteAccountData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    setState(() {
+      _items = _seedItems();
+      _signedIn = false;
+      _onboarded = false;
+      _accountLabel = 'Guest';
+      _tab = 0;
+    });
+    _showMessage('Account data deleted.');
+  }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 }
 
-class _ReviewSheet extends StatelessWidget {
-  const _ReviewSheet({required this.result, required this.sourceText});
+enum ReviewDecisionKind { accept, referenceOnly, manualTriage, dismiss }
 
+class _ReviewDecision {
+  _ReviewDecision(this.kind, this.result);
+  final ReviewDecisionKind kind;
   final ParseResult result;
+}
+
+class _ReviewSheet extends StatefulWidget {
+  const _ReviewSheet({required this.initial, required this.sourceText});
+  final ParseResult initial;
   final String sourceText;
+
+  @override
+  State<_ReviewSheet> createState() => _ReviewSheetState();
+}
+
+class _ReviewSheetState extends State<_ReviewSheet> {
+  late final TextEditingController _titleController;
+  late final TextEditingController _summaryController;
+  late final List<TextEditingController> _fieldControllers;
+  late ActionType _actionType;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.initial.title);
+    _summaryController = TextEditingController(text: widget.initial.summary);
+    _fieldControllers = widget.initial.fields.map((f) => TextEditingController(text: f.value)).toList();
+    _actionType = widget.initial.actionType;
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _summaryController.dispose();
+    for (final c in _fieldControllers) { c.dispose(); }
+    super.dispose();
+  }
+
+  ParseResult _current() {
+    final fields = <ExtractedField>[];
+    for (var i = 0; i < widget.initial.fields.length; i++) {
+      final original = widget.initial.fields[i];
+      fields.add(ExtractedField(label: original.label, value: _fieldControllers[i].text.trim(), confidence: original.confidence, requiresConfirmation: original.requiresConfirmation, confirmed: original.confirmed));
+    }
+    final dateField = fields.where((f) => f.label.toLowerCase().contains('date')).cast<ExtractedField?>().firstOrNull;
+    final amountField = fields.where((f) => f.label == 'Amount').cast<ExtractedField?>().firstOrNull;
+    final locationField = fields.where((f) => f.label == 'Location').cast<ExtractedField?>().firstOrNull;
+    return ParseResult(
+      title: _titleController.text.trim(),
+      summary: _summaryController.text.trim(),
+      itemType: widget.initial.itemType,
+      actionType: _actionType,
+      fields: fields,
+      inputType: widget.initial.inputType,
+      primaryDate: dateField == null || dateField.value.isEmpty ? null : widget.initial.primaryDate,
+      amount: amountField?.value,
+      location: locationField?.value,
+      reference: widget.initial.reference,
+      needsManualReview: fields.any((f) => f.value.isEmpty),
+      sensitive: widget.initial.sensitive,
+      sourcePath: widget.initial.sourcePath,
+    );
+  }
+
+  bool get _canAccept {
+    final current = _current();
+    if (current.title.isEmpty || current.summary.isEmpty) return false;
+    if (current.needsManualReview) return false;
+    return current.fields.where((f) => f.requiresConfirmation).every((f) => f.confirmed);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-      ),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 16),
       child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Review before saving',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 8),
-            Text(result.summary),
-            const SizedBox(height: 16),
-            Container(
-              width: double.infinity,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Review before saving', style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 8),
+          TextField(controller: _titleController, decoration: const InputDecoration(labelText: 'Suggested title')),
+          const SizedBox(height: 12),
+          TextField(controller: _summaryController, minLines: 2, maxLines: 4, decoration: const InputDecoration(labelText: 'Summary')),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<ActionType>(initialValue: _actionType, items: ActionType.values.map((e) => DropdownMenuItem(value: e, child: Text(e.name))).toList(), onChanged: (v) => setState(() => _actionType = v!), decoration: const InputDecoration(labelText: 'Save as')),
+          const SizedBox(height: 12),
+          Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(border: Border.all(color: Colors.black12), borderRadius: BorderRadius.circular(12)), child: Text(widget.sourceText)),
+          const SizedBox(height: 12),
+          for (var i = 0; i < widget.initial.fields.length; i++)
+            Card(child: Padding(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: Colors.white,
-                border: Border.all(color: Colors.black12),
-              ),
-              child: Text(sourceText),
-            ),
-            const SizedBox(height: 16),
-            ...result.fields.map(
-              (field) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(field.label),
-                subtitle: Text(field.value),
-                trailing: Text(
-                  field.confidence.name.toUpperCase(),
-                  style: TextStyle(
-                    color: switch (field.confidence) {
-                      ConfidenceLevel.high => Colors.green,
-                      ConfidenceLevel.medium => Colors.orange,
-                      ConfidenceLevel.low => Colors.red,
-                    },
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(widget.initial.fields[i].label),
+                const SizedBox(height: 8),
+                TextField(controller: _fieldControllers[i], onChanged: (_) => setState(() {})),
+                if (widget.initial.fields[i].requiresConfirmation)
+                  CheckboxListTile(
+                    value: widget.initial.fields[i].confirmed,
+                    onChanged: (value) => setState(() => widget.initial.fields[i].confirmed = value ?? false),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('I confirm this ${widget.initial.fields[i].label.toLowerCase()} before saving'),
                   ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            if (result.needsManualReview)
-              const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.warning_amber_outlined),
-                title: Text('Manual confirmation required'),
-                subtitle: Text(
-                  'Missing or conflicting fields should be reviewed before saving.',
-                ),
-              ),
-            if (result.duplicateWarning)
-              const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.copy_all_outlined),
-                title: Text('Possible duplicate'),
-                subtitle: Text(
-                  'The app found a similar source and will warn instead of auto-merging.',
-                ),
-              ),
-            if (result.sensitive)
-              const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.privacy_tip_outlined),
-                title: Text('Sensitive category'),
-                subtitle: Text(
-                  'Treat this conservatively and prefer review or reference-only when unsure.',
-                ),
-              ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Accept'),
-                ),
-                OutlinedButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Dismiss'),
-                ),
-              ],
-            ),
-          ],
-        ),
+              ]),
+            )),
+          if (widget.initial.needsManualReview)
+            const ListTile(contentPadding: EdgeInsets.zero, leading: Icon(Icons.warning_amber_outlined), title: Text('Manual triage required'), subtitle: Text('Missing or conflicting fields cannot be accepted in one tap. Route to Inbox or reference-only.')),
+          if (widget.initial.sensitive)
+            const ListTile(contentPadding: EdgeInsets.zero, leading: Icon(Icons.privacy_tip_outlined), title: Text('Sensitive category'), subtitle: Text('Use conservative review and reference-only fallback when unsure.')),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            FilledButton(onPressed: _canAccept ? () => Navigator.pop(context, _ReviewDecision(ReviewDecisionKind.accept, _current())) : null, child: const Text('Accept')),
+            OutlinedButton(onPressed: () => Navigator.pop(context, _ReviewDecision(ReviewDecisionKind.referenceOnly, _current()..actionType = ActionType.referenceOnly)), child: const Text('Mark reference-only')),
+            OutlinedButton(onPressed: () => Navigator.pop(context, _ReviewDecision(ReviewDecisionKind.manualTriage, _current())), child: const Text('Save to Inbox for triage')),
+            TextButton(onPressed: () => Navigator.pop(context, _ReviewDecision(ReviewDecisionKind.dismiss, _current())), child: const Text('Dismiss')),
+          ]),
+        ]),
       ),
     );
   }
 }
 
-List<LifeAdminItem> _seedItems() {
-  final now = DateTime.now();
-  return [
-    LifeAdminItem(
-      id: 'seed-1',
-      title: 'Pay electricity bill for \$84.20',
-      summary:
-          'Utility bill captured from a screenshot. Due date and amount were extracted with high confidence.',
-      sourceTitle: 'City Power bill',
-      sourceText:
-          'City Power statement. Amount due \$84.20 by 04/24/2026. Account 5519.',
-      inputType: CaptureInputType.screenshot,
-      itemType: ItemType.bill,
-      actionType: ActionType.task,
-      status: ItemStatus.today,
-      actionLikelyRequired: true,
-      amount: '\$84.20',
-      reference: '5519',
-      primaryDate: now.add(const Duration(hours: 18)),
-      reminderLabel: 'Primary reminder',
-      fields: [
-        ExtractedField(
-          label: 'Due date',
-          value: '4/24/2026',
-          confidence: ConfidenceLevel.high,
-        ),
-        ExtractedField(
-          label: 'Amount',
-          value: '\$84.20',
-          confidence: ConfidenceLevel.high,
-        ),
-      ],
-      history: [
-        TimelineEntry(
-          label: 'Accepted from review',
-          at: now.subtract(const Duration(hours: 2)),
-        ),
-      ],
-    ),
-    LifeAdminItem(
-      id: 'seed-2',
-      title: 'Confirm dentist appointment details',
-      summary: 'Appointment draft waiting for final confirmation.',
-      sourceTitle: 'Dental office text',
-      sourceText:
-          'Reminder: dentist appointment on April 28 at 2:30 PM at River Dental. Confirmation 8A2F.',
-      inputType: CaptureInputType.pastedText,
-      itemType: ItemType.appointment,
-      actionType: ActionType.calendarDraft,
-      status: ItemStatus.upcoming,
-      actionLikelyRequired: true,
-      primaryDate: now.add(const Duration(days: 4)),
-      location: 'River Dental',
-      reference: '8A2F',
-      reminderLabel: 'Early nudge + primary',
-      fields: [
-        ExtractedField(
-          label: 'Appointment date',
-          value: '4/28/2026',
-          confidence: ConfidenceLevel.high,
-        ),
-        ExtractedField(
-          label: 'Location',
-          value: 'River Dental',
-          confidence: ConfidenceLevel.medium,
-        ),
-      ],
-      history: [
-        TimelineEntry(
-          label: 'Drafted from captured text',
-          at: now.subtract(const Duration(days: 1)),
-        ),
-      ],
-    ),
-    LifeAdminItem(
-      id: 'seed-3',
-      title: 'Insurance letter saved as reference',
-      summary:
-          'Informational update with no clear action. Kept in the archive for traceability.',
-      sourceTitle: 'Insurance notice',
-      sourceText:
-          'For your records: policy update effective May 1. No action required.',
-      inputType: CaptureInputType.paperDoc,
-      itemType: ItemType.informational,
-      actionType: ActionType.referenceOnly,
-      status: ItemStatus.archived,
-      actionLikelyRequired: false,
-      sensitive: true,
-      fields: [
-        ExtractedField(
-          label: 'Classification',
-          value: 'Reference-only',
-          confidence: ConfidenceLevel.medium,
-        ),
-      ],
-      history: [
-        TimelineEntry(
-          label: 'Saved as reference-only',
-          at: now.subtract(const Duration(days: 2)),
-        ),
-      ],
-    ),
-  ];
-}
+List<LifeAdminItem> _seedItems() => [
+  LifeAdminItem(
+    id: 'seed-1',
+    title: 'Pay electricity bill for \$84.20',
+    summary: 'Utility bill captured from a screenshot and saved after confirmation.',
+    sourceText: 'City Power statement. Amount due \$84.20 by 04/24/2026. Account 5519.',
+    inputType: CaptureInputType.screenshot,
+    itemType: ItemType.bill,
+    actionType: ActionType.task,
+    status: ItemStatus.today,
+    fields: [
+      ExtractedField(label: 'Due date', value: '4/24/2026', confidence: ConfidenceLevel.high, requiresConfirmation: true, confirmed: true),
+      ExtractedField(label: 'Amount', value: '\$84.20', confidence: ConfidenceLevel.high, requiresConfirmation: true, confirmed: true),
+    ],
+    amount: '\$84.20',
+    primaryDate: DateTime.now().add(const Duration(hours: 8)),
+    reference: '5519',
+  ),
+  LifeAdminItem(
+    id: 'seed-2',
+    title: 'Insurance letter saved as reference',
+    summary: 'Informational update with no clear action.',
+    sourceText: 'For your records: policy update effective May 1. No action required.',
+    inputType: CaptureInputType.paperDoc,
+    itemType: ItemType.informational,
+    actionType: ActionType.referenceOnly,
+    status: ItemStatus.archived,
+    fields: [ExtractedField(label: 'Classification', value: 'Reference-only', confidence: ConfidenceLevel.medium)],
+    sensitive: true,
+  ),
+];
 
-String _sampleScreenshotText() =>
-    'Utility Bill\nAmount due: \$84.20\nDue 04/24/2026\nAccount #5519\nPay online or by mail.';
-String _samplePaperDocText() =>
-    'Renewal notice\nPlease submit the building form by May 12. Reference FORM-8821. Late submissions may lose coverage.';
-String _samplePastedText() =>
-    'Hi! This is a reminder that your dentist appointment is scheduled for April 28 at River Dental. Confirmation 8A2F.';
+extension<T> on Iterable<T> {
+  T? get firstOrNull => isEmpty ? null : first;
+}
