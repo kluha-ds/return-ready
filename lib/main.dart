@@ -1,317 +1,203 @@
 import 'dart:convert';
-import 'dart:math';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const AiLifeAdminApp());
 }
 
-enum CaptureSourceType { share, upload, scan, forwardedEmail }
+enum ProcessingState { received, processing, needsReview, completed, failed, duplicate }
+enum WorkflowState { newItem, reviewed, actioned, waiting, done, archived }
+enum ItemCategory { billPayment, bookingAppointment, receiptReturn, formNotice, other }
+enum ConfidenceLevel { high, medium, low }
+enum ActionType { reminder, task }
+enum IntakeChannel { upload, emailForward }
 
-enum ItemState {
-  newItem,
-  needsReview,
-  inbox,
-  scheduled,
-  waiting,
-  archived,
-  done,
-}
-
-enum TopicCategory {
-  healthcare,
-  school,
-  money,
-  travel,
-  subscriptions,
-  home,
-  other,
-}
-
-enum ActionKind {
-  confirmReminder,
-  followUpReminder,
-  archiveRecord,
-  markDone,
-  manualReview,
-}
-
-enum ConfidenceLevel { high, low, undetermined }
-
-class EvidenceSnippet {
-  EvidenceSnippet({required this.label, required this.text});
-
-  final String label;
-  final String text;
-
-  Map<String, dynamic> toJson() => {'label': label, 'text': text};
-
-  factory EvidenceSnippet.fromJson(Map<String, dynamic> json) =>
-      EvidenceSnippet(
-        label: json['label'] as String,
-        text: json['text'] as String,
-      );
-}
-
-class ExtractedFact {
-  ExtractedFact({
+class ExtractedField {
+  const ExtractedField({
     required this.label,
     required this.value,
     required this.confidence,
-    this.evidence,
-    this.isCritical = false,
-    this.confirmed = false,
+    required this.source,
+    this.unresolved = false,
   });
 
-  String label;
-  String value;
-  ConfidenceLevel confidence;
-  EvidenceSnippet? evidence;
-  bool isCritical;
-  bool confirmed;
+  final String label;
+  final String value;
+  final ConfidenceLevel confidence;
+  final String source;
+  final bool unresolved;
 
   Map<String, dynamic> toJson() => {
-    'label': label,
-    'value': value,
-    'confidence': confidence.name,
-    'evidence': evidence?.toJson(),
-    'isCritical': isCritical,
-    'confirmed': confirmed,
-  };
+        'label': label,
+        'value': value,
+        'confidence': confidence.name,
+        'source': source,
+        'unresolved': unresolved,
+      };
 
-  factory ExtractedFact.fromJson(Map<String, dynamic> json) => ExtractedFact(
-    label: json['label'] as String,
-    value: json['value'] as String,
-    confidence: ConfidenceLevel.values.byName(json['confidence'] as String),
-    evidence: json['evidence'] == null
-        ? null
-        : EvidenceSnippet.fromJson(
-            Map<String, dynamic>.from(json['evidence'] as Map),
-          ),
-    isCritical: json['isCritical'] as bool? ?? false,
-    confirmed: json['confirmed'] as bool? ?? false,
-  );
+  factory ExtractedField.fromJson(Map<String, dynamic> json) => ExtractedField(
+        label: json['label'] as String,
+        value: json['value'] as String,
+        confidence: ConfidenceLevel.values.byName(json['confidence'] as String),
+        source: json['source'] as String,
+        unresolved: json['unresolved'] as bool? ?? false,
+      );
 }
 
-class TimelineEvent {
-  TimelineEvent({required this.label, required this.at});
+class AdminAction {
+  const AdminAction({
+    required this.id,
+    required this.type,
+    required this.title,
+    required this.dueAt,
+    required this.status,
+  });
 
-  final String label;
-  final DateTime at;
+  final String id;
+  final ActionType type;
+  final String title;
+  final DateTime? dueAt;
+  final String status;
 
-  Map<String, dynamic> toJson() => {'label': label, 'at': at.toIso8601String()};
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'type': type.name,
+        'title': title,
+        'dueAt': dueAt?.toIso8601String(),
+        'status': status,
+      };
 
-  factory TimelineEvent.fromJson(Map<String, dynamic> json) => TimelineEvent(
-    label: json['label'] as String,
-    at: DateTime.parse(json['at'] as String),
-  );
+  factory AdminAction.fromJson(Map<String, dynamic> json) => AdminAction(
+        id: json['id'] as String,
+        type: ActionType.values.byName(json['type'] as String),
+        title: json['title'] as String,
+        dueAt: json['dueAt'] == null ? null : DateTime.parse(json['dueAt'] as String),
+        status: json['status'] as String,
+      );
 }
 
 class InboxItem {
-  InboxItem({
+  const InboxItem({
     required this.id,
-    required this.sourceType,
-    required this.sourceTitle,
-    required this.sourceText,
+    required this.title,
     required this.summary,
-    required this.plainLanguageExplanation,
-    required this.recommendedNextStep,
-    required this.state,
     required this.category,
-    required this.facts,
-    required this.createdAt,
-    this.sourcePath,
-    this.documentType = 'general notice',
-    this.eventDate,
-    this.dueDate,
-    this.amount,
-    this.provider,
-    this.contact,
-    this.referenceNumber,
-    this.urgent = false,
-    this.overdueNudges = false,
-    this.reminderLabel,
-    this.history = const [],
+    required this.processingState,
+    required this.workflowState,
+    required this.channel,
+    required this.receivedAt,
+    required this.suggestedNextStep,
+    required this.rawPreview,
+    required this.stageNotes,
+    required this.fields,
+    required this.actions,
+    this.failureReason,
+    this.duplicateOf,
   });
 
-  String id;
-  CaptureSourceType sourceType;
-  String sourceTitle;
-  String sourceText;
-  String summary;
-  String plainLanguageExplanation;
-  String recommendedNextStep;
-  ItemState state;
-  TopicCategory category;
-  List<ExtractedFact> facts;
-  DateTime createdAt;
-  String documentType;
-  DateTime? eventDate;
-  DateTime? dueDate;
-  String? amount;
-  String? provider;
-  String? contact;
-  String? referenceNumber;
-  String? sourcePath;
-  bool urgent;
-  bool overdueNudges;
-  String? reminderLabel;
-  List<TimelineEvent> history;
+  final String id;
+  final String title;
+  final String summary;
+  final ItemCategory category;
+  final ProcessingState processingState;
+  final WorkflowState workflowState;
+  final IntakeChannel channel;
+  final DateTime receivedAt;
+  final String suggestedNextStep;
+  final String rawPreview;
+  final List<String> stageNotes;
+  final List<ExtractedField> fields;
+  final List<AdminAction> actions;
+  final String? failureReason;
+  final String? duplicateOf;
+
+  InboxItem copyWith({
+    ProcessingState? processingState,
+    WorkflowState? workflowState,
+    List<AdminAction>? actions,
+  }) => InboxItem(
+        id: id,
+        title: title,
+        summary: summary,
+        category: category,
+        processingState: processingState ?? this.processingState,
+        workflowState: workflowState ?? this.workflowState,
+        channel: channel,
+        receivedAt: receivedAt,
+        suggestedNextStep: suggestedNextStep,
+        rawPreview: rawPreview,
+        stageNotes: stageNotes,
+        fields: fields,
+        actions: actions ?? this.actions,
+        failureReason: failureReason,
+        duplicateOf: duplicateOf,
+      );
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'sourceType': sourceType.name,
-    'sourceTitle': sourceTitle,
-    'sourceText': sourceText,
-    'summary': summary,
-    'plainLanguageExplanation': plainLanguageExplanation,
-    'recommendedNextStep': recommendedNextStep,
-    'state': state.name,
-    'category': category.name,
-    'facts': facts.map((fact) => fact.toJson()).toList(),
-    'createdAt': createdAt.toIso8601String(),
-    'documentType': documentType,
-    'eventDate': eventDate?.toIso8601String(),
-    'dueDate': dueDate?.toIso8601String(),
-    'amount': amount,
-    'provider': provider,
-    'contact': contact,
-    'referenceNumber': referenceNumber,
-    'sourcePath': sourcePath,
-    'urgent': urgent,
-    'overdueNudges': overdueNudges,
-    'reminderLabel': reminderLabel,
-    'history': history.map((event) => event.toJson()).toList(),
-  };
+        'id': id,
+        'title': title,
+        'summary': summary,
+        'category': category.name,
+        'processingState': processingState.name,
+        'workflowState': workflowState.name,
+        'channel': channel.name,
+        'receivedAt': receivedAt.toIso8601String(),
+        'suggestedNextStep': suggestedNextStep,
+        'rawPreview': rawPreview,
+        'stageNotes': stageNotes,
+        'fields': fields.map((f) => f.toJson()).toList(),
+        'actions': actions.map((a) => a.toJson()).toList(),
+        'failureReason': failureReason,
+        'duplicateOf': duplicateOf,
+      };
 
   factory InboxItem.fromJson(Map<String, dynamic> json) => InboxItem(
-    id: json['id'] as String,
-    sourceType: CaptureSourceType.values.byName(json['sourceType'] as String),
-    sourceTitle: json['sourceTitle'] as String,
-    sourceText: json['sourceText'] as String,
-    summary: json['summary'] as String,
-    plainLanguageExplanation: json['plainLanguageExplanation'] as String,
-    recommendedNextStep: json['recommendedNextStep'] as String,
-    state: ItemState.values.byName(json['state'] as String),
-    category: TopicCategory.values.byName(json['category'] as String),
-    facts: ((json['facts'] as List?) ?? [])
-        .map(
-          (fact) =>
-              ExtractedFact.fromJson(Map<String, dynamic>.from(fact as Map)),
-        )
-        .toList(),
-    createdAt: DateTime.parse(json['createdAt'] as String),
-    documentType: json['documentType'] as String? ?? 'general notice',
-    eventDate: json['eventDate'] == null
-        ? null
-        : DateTime.parse(json['eventDate'] as String),
-    dueDate: json['dueDate'] == null
-        ? null
-        : DateTime.parse(json['dueDate'] as String),
-    amount: json['amount'] as String?,
-    provider: json['provider'] as String?,
-    contact: json['contact'] as String?,
-    referenceNumber: json['referenceNumber'] as String?,
-    sourcePath: json['sourcePath'] as String?,
-    urgent: json['urgent'] as bool? ?? false,
-    overdueNudges: json['overdueNudges'] as bool? ?? false,
-    reminderLabel: json['reminderLabel'] as String?,
-    history: ((json['history'] as List?) ?? [])
-        .map(
-          (event) =>
-              TimelineEvent.fromJson(Map<String, dynamic>.from(event as Map)),
-        )
-        .toList(),
-  );
+        id: json['id'] as String,
+        title: json['title'] as String,
+        summary: json['summary'] as String,
+        category: ItemCategory.values.byName(json['category'] as String),
+        processingState: ProcessingState.values.byName(json['processingState'] as String),
+        workflowState: WorkflowState.values.byName(json['workflowState'] as String),
+        channel: IntakeChannel.values.byName(json['channel'] as String),
+        receivedAt: DateTime.parse(json['receivedAt'] as String),
+        suggestedNextStep: json['suggestedNextStep'] as String,
+        rawPreview: json['rawPreview'] as String,
+        stageNotes: (json['stageNotes'] as List).cast<String>(),
+        fields: (json['fields'] as List)
+            .map((item) => ExtractedField.fromJson(Map<String, dynamic>.from(item as Map)))
+            .toList(),
+        actions: (json['actions'] as List)
+            .map((item) => AdminAction.fromJson(Map<String, dynamic>.from(item as Map)))
+            .toList(),
+        failureReason: json['failureReason'] as String?,
+        duplicateOf: json['duplicateOf'] as String?,
+      );
 }
 
-class AppStorage {
-  static const _itemsKey = 'items_v2';
-  static const _signedInKey = 'signed_in';
-  static const _quietHoursKey = 'quiet_hours';
+class AppStore {
+  static const _key = 'ai_life_admin_v1';
 
-  Future<List<InboxItem>> loadItems() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_itemsKey);
-      if (raw == null || raw.isEmpty) return _seedItems();
-      return (jsonDecode(raw) as List<dynamic>)
-          .map(
-            (item) =>
-                InboxItem.fromJson(Map<String, dynamic>.from(item as Map)),
-          )
-          .toList();
-    } on MissingPluginException {
-      return _seedItems();
-    }
-  }
-
-  Future<void> saveItems(List<InboxItem> items) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        _itemsKey,
-        jsonEncode(items.map((item) => item.toJson()).toList()),
-      );
-    } on MissingPluginException {
-      return;
-    }
-  }
-
-  Future<bool> loadSignedIn() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getBool(_signedInKey) ?? false;
-    } on MissingPluginException {
-      return false;
-    }
-  }
-
-  Future<void> saveSignedIn(bool value) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_signedInKey, value);
-    } on MissingPluginException {
-      return;
-    }
-  }
-
-  Future<bool> loadQuietHours() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getBool(_quietHoursKey) ?? true;
-    } on MissingPluginException {
-      return true;
-    }
-  }
-
-  Future<void> saveQuietHours(bool value) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_quietHoursKey, value);
-    } on MissingPluginException {
-      return;
-    }
-  }
-
-  Future<String> exportItems(List<InboxItem> items) async {
-    final payload = const JsonEncoder.withIndent(
-      '  ',
-    ).convert({'items': items.map((item) => item.toJson()).toList()});
-    await Clipboard.setData(ClipboardData(text: payload));
-    return 'clipboard';
-  }
-
-  Future<void> reset() async {
+  Future<List<InboxItem>> load() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_itemsKey);
-    await prefs.remove(_signedInKey);
-    await prefs.remove(_quietHoursKey);
+    final raw = prefs.getString(_key);
+    if (raw == null) return seedItems();
+    return (jsonDecode(raw) as List)
+        .map((item) => InboxItem.fromJson(Map<String, dynamic>.from(item as Map)))
+        .toList();
+  }
+
+  Future<void> save(List<InboxItem> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key, jsonEncode(items.map((e) => e.toJson()).toList()));
+  }
+
+  Future<void> clear() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_key);
   }
 }
 
@@ -322,44 +208,30 @@ class AiLifeAdminApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'AI Life Admin',
+      title: 'AI Life Admin Inbox',
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3F51F7)),
-        scaffoldBackgroundColor: const Color(0xFFF6F7FB),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4263EB)),
+        scaffoldBackgroundColor: const Color(0xFFF5F7FB),
       ),
-      home: const HomePage(),
+      home: const HomeScreen(),
     );
   }
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomePageState extends State<HomePage> {
-  final _storage = AppStorage();
-  final _picker = ImagePicker();
-  final _searchController = TextEditingController();
-  final _pasteController = TextEditingController();
-  final _forwardedEmailController = TextEditingController();
-  final _forwardedFromController = TextEditingController(
-    text: 'billing@streambox.example',
-  );
-  final _forwardedReceivedController = TextEditingController(
-    text: '2026-04-21 08:30 UTC',
-  );
-  final _forwardedAttachmentController = TextEditingController(
-    text: 'renewal-notice.pdf',
-  );
-  List<InboxItem> _items = [];
+class _HomeScreenState extends State<HomeScreen> {
+  final _store = AppStore();
   bool _loading = true;
-  bool _signedIn = false;
-  bool _quietHours = true;
   int _tab = 0;
+  String _query = '';
+  List<InboxItem> _items = [];
 
   @override
   void initState() {
@@ -367,1246 +239,551 @@ class _HomePageState extends State<HomePage> {
     _load();
   }
 
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _pasteController.dispose();
-    _forwardedEmailController.dispose();
-    _forwardedFromController.dispose();
-    _forwardedReceivedController.dispose();
-    _forwardedAttachmentController.dispose();
-    super.dispose();
-  }
-
   Future<void> _load() async {
-    final items = await _storage.loadItems();
-    final signedIn = await _storage.loadSignedIn();
-    final quietHours = await _storage.loadQuietHours();
-    if (!mounted) return;
+    final items = await _store.load();
     setState(() {
       _items = items;
-      _signedIn = signedIn;
-      _quietHours = quietHours;
       _loading = false;
     });
   }
 
-  Future<void> _persist() async {
-    await _storage.saveItems(_items);
-    await _storage.saveSignedIn(_signedIn);
-    await _storage.saveQuietHours(_quietHours);
+  Future<void> _save() => _store.save(_items);
+
+  Future<void> _reset() async {
+    await _store.clear();
+    final items = seedItems();
+    setState(() => _items = items);
+    await _save();
+  }
+
+  Future<void> _export() async {
+    final payload = const JsonEncoder.withIndent('  ')
+        .convert(_items.map((e) => e.toJson()).toList());
+    await Clipboard.setData(ClipboardData(text: payload));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Export copied to clipboard.')),
+    );
+  }
+
+  Future<void> _ingestSample(IntakeChannel channel) async {
+    final sample = generatedSample(channel, _items);
+    setState(() => _items = [sample, ..._items]);
+    await _save();
+  }
+
+  Future<void> _updateItem(InboxItem item) async {
+    setState(() {
+      _items = _items.map((e) => e.id == item.id ? item : e).toList();
+    });
+    await _save();
+  }
+
+  List<InboxItem> get _activeInbox => _items
+      .where((item) => item.workflowState != WorkflowState.archived)
+      .where((item) => item.workflowState != WorkflowState.done)
+      .toList();
+
+  List<InboxItem> get _upcoming => _items
+      .where((item) => item.actions.any((a) => a.dueAt != null && a.status != 'done'))
+      .toList();
+
+  List<InboxItem> get _history {
+    final q = _query.trim().toLowerCase();
+    final source = _items.where((item) => item.workflowState == WorkflowState.archived || item.workflowState == WorkflowState.done || item.processingState == ProcessingState.failed || item.processingState == ProcessingState.duplicate);
+    if (q.isEmpty) return source.toList();
+    return source.where((item) {
+      final haystack = [
+        item.title,
+        item.summary,
+        item.rawPreview,
+        item.suggestedNextStep,
+        ...item.fields.map((f) => '${f.label} ${f.value} ${f.source}'),
+      ].join(' ').toLowerCase();
+      return haystack.contains(q);
+    }).toList();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
+    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+
+    final body = switch (_tab) {
+      0 => InboxView(items: _activeInbox, onOpen: _openItem, onIngest: _ingestSample),
+      1 => UpcomingView(items: _upcoming, onOpen: _openItem),
+      2 => SearchView(items: _history, query: _query, onChanged: (v) => setState(() => _query = v), onOpen: _openItem),
+      _ => SettingsView(onExport: _export, onReset: _reset),
+    };
 
     return Scaffold(
-      appBar: AppBar(title: const Text('AI Life Admin')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showCaptureSheet,
-        icon: const Icon(Icons.add_a_photo_outlined),
-        label: const Text('Capture'),
-      ),
+      appBar: AppBar(title: const Text('AI Life Admin Inbox')),
+      body: body,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
-        onDestinationSelected: (value) => setState(() => _tab = value),
+        onDestinationSelected: (index) => setState(() => _tab = index),
         destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.inbox_outlined),
-            label: 'Inbox',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.search_outlined),
-            label: 'Search',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            label: 'Settings',
-          ),
+          NavigationDestination(icon: Icon(Icons.inbox_outlined), label: 'Inbox'),
+          NavigationDestination(icon: Icon(Icons.event_note_outlined), label: 'Upcoming'),
+          NavigationDestination(icon: Icon(Icons.search), label: 'History'),
+          NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
         ],
-      ),
-      body: SafeArea(
-        child: IndexedStack(
-          index: _tab,
-          children: [
-            _buildInboxView(),
-            _buildSearchView(_items),
-            _buildSettingsView(),
-          ],
-        ),
       ),
     );
   }
 
-  Widget _buildInboxView() {
-    final needsReview = _items
-        .where((item) => item.state == ItemState.needsReview)
-        .toList();
-    final inbox = _items
-        .where((item) => item.state == ItemState.inbox)
-        .toList();
-    final urgent = _items
-        .where(
-          (item) =>
-              item.urgent &&
-              item.state != ItemState.archived &&
-              item.state != ItemState.done,
-        )
-        .toList();
-    final upcoming = _items
-        .where((item) => item.state == ItemState.scheduled)
-        .toList();
-    final waiting = _items
-        .where((item) => item.state == ItemState.waiting)
-        .toList();
+  Future<void> _openItem(InboxItem item) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => ItemSheet(item: item, onChanged: _updateItem),
+    );
+  }
+}
 
+class InboxView extends StatelessWidget {
+  const InboxView({super.key, required this.items, required this.onOpen, required this.onIngest});
+
+  final List<InboxItem> items;
+  final Future<void> Function(InboxItem) onOpen;
+  final Future<void> Function(IntakeChannel) onIngest;
+
+  @override
+  Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'What needs my attention now?',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _signedIn
-                      ? 'Capture screenshots, PDFs, scans, or forwarded emails. Review extracted facts, confirm anything important, then schedule or archive with confidence.'
-                      : 'Sign in to try the mobile-first capture and triage flow for life-admin paperwork.',
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton(
-                      onPressed: _signedIn ? _showCaptureSheet : _signIn,
-                      child: Text(_signedIn ? 'Capture item' : 'Sign in'),
-                    ),
-                    OutlinedButton(
-                      onPressed: _loadExample,
-                      child: const Text('Load example'),
-                    ),
-                    Chip(label: Text('Needs review ${needsReview.length}')),
-                    Chip(label: Text('Urgent ${urgent.length}')),
-                    Chip(label: Text('Upcoming ${upcoming.length}')),
-                  ],
-                ),
-              ],
-            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Forward or upload life-admin clutter', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              const Text('v1 supports uploads and a forwarding address. This prototype simulates each path with staged extraction, duplicate handling, and safe review before actions.'),
+              const SizedBox(height: 12),
+              const SelectableText('Forwarding address: inbox-demo@ailifeadmin.app'),
+              const SizedBox(height: 12),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                FilledButton.icon(onPressed: () => onIngest(IntakeChannel.upload), icon: const Icon(Icons.upload_file_outlined), label: const Text('Simulate upload')),
+                OutlinedButton.icon(onPressed: () => onIngest(IntakeChannel.emailForward), icon: const Icon(Icons.forward_to_inbox_outlined), label: const Text('Simulate forwarded email')),
+              ]),
+            ]),
           ),
         ),
-        _section('Needs review', needsReview),
-        _section('Inbox', inbox),
-        _section('Urgent', urgent),
-        _section('Upcoming', upcoming),
-        _section('Waiting', waiting),
+        const SizedBox(height: 12),
+        ...items.map((item) => ItemCard(item: item, onTap: () => onOpen(item))),
       ],
     );
   }
+}
 
-  Widget _buildSearchView(List<InboxItem> items) {
-    final query = _searchController.text.toLowerCase();
-    final filtered = items.where((item) {
-      if (query.isEmpty) return true;
-      return item.summary.toLowerCase().contains(query) ||
-          item.sourceText.toLowerCase().contains(query) ||
-          item.sourceTitle.toLowerCase().contains(query);
-    }).toList();
+class UpcomingView extends StatelessWidget {
+  const UpcomingView({super.key, required this.items, required this.onOpen});
+  final List<InboxItem> items;
+  final Future<void> Function(InboxItem) onOpen;
 
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: items.isEmpty
+          ? [const EmptyState(message: 'No reminders or tasks yet.')]
+          : items.map((item) => ItemCard(item: item, onTap: () => onOpen(item))).toList(),
+    );
+  }
+}
+
+class SearchView extends StatelessWidget {
+  const SearchView({super.key, required this.items, required this.query, required this.onChanged, required this.onOpen});
+  final List<InboxItem> items;
+  final String query;
+  final ValueChanged<String> onChanged;
+  final Future<void> Function(InboxItem) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         TextField(
-          controller: _searchController,
-          onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search),
-            hintText: 'Search items and archived records',
-            border: OutlineInputBorder(),
-          ),
+          onChanged: onChanged,
+          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search summaries, fields, OCR text, archived items'),
         ),
-        const SizedBox(height: 16),
-        Text('Search all items', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 8),
-        ...filtered.map(_itemCard),
-        if (filtered.isEmpty)
-          const Card(child: ListTile(title: Text('No matching items'))),
+        const SizedBox(height: 12),
+        ...items.map((item) => ItemCard(item: item, onTap: () => onOpen(item))),
+        if (items.isEmpty) const EmptyState(message: 'No matching archived, done, failed, or duplicate items.'),
       ],
     );
   }
+}
 
-  Widget _buildSettingsView() {
+class SettingsView extends StatelessWidget {
+  const SettingsView({super.key, required this.onExport, required this.onReset});
+  final Future<void> Function() onExport;
+  final Future<void> Function() onReset;
+
+  @override
+  Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text(
-          'Desktop/web MVP support',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const Card(
-          child: ListTile(
-            title: Text('Supportive review experience'),
-            subtitle: Text(
-              'This prototype focuses on mobile capture and triage, while preserving searchable records and item detail for later review.',
-            ),
-          ),
-        ),
-        SwitchListTile(
-          value: _quietHours,
-          onChanged: (value) async {
-            setState(() => _quietHours = value);
-            await _persist();
-          },
-          title: const Text('Quiet hours'),
-          subtitle: const Text('Keep reminders calmer by default.'),
-        ),
-        ListTile(
-          title: const Text('Export item data and source info'),
-          trailing: FilledButton(
-            onPressed: () async {
-              final path = await _storage.exportItems(_items);
-              if (!mounted) return;
-              _message('Exported to $path');
-            },
-            child: const Text('Export'),
-          ),
-        ),
-        ListTile(
-          title: const Text('Delete source files only'),
-          trailing: OutlinedButton(
-            onPressed: () async {
-              setState(() {
-                for (final item in _items) {
-                  item.sourcePath = null;
-                }
-              });
-              await _persist();
-              _message('Removed stored source references from local data.');
-            },
-            child: const Text('Delete sources'),
-          ),
-        ),
-        ListTile(
-          title: const Text('Reset local data'),
-          trailing: OutlinedButton(
-            onPressed: () async {
-              await _storage.reset();
-              setState(() {
-                _signedIn = false;
-                _items = _seedItems();
-              });
-            },
-            child: const Text('Reset'),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Trust and privacy controls', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              const Text('Important fields stay editable, low-confidence date and amount values stay unresolved, and no external side effects happen without approval.'),
+              const SizedBox(height: 12),
+              const Text('Suggested prototype retention policy:'),
+              const Text('• raw files: 30 days'),
+              const Text('• OCR text and extracted fields: until user deletes or exports'),
+              const Text('• model providers: use zero-retention mode before launch'),
+              const Text('• deletion must clear storage, indexes, and pending queues'),
+              const SizedBox(height: 12),
+              Wrap(spacing: 8, children: [
+                OutlinedButton(onPressed: onExport, child: const Text('Export data')),
+                TextButton(onPressed: onReset, child: const Text('Delete local data')),
+              ]),
+            ]),
           ),
         ),
       ],
     );
   }
+}
 
-  Widget _section(String title, List<InboxItem> items) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 16),
-        Text(title, style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 8),
-        if (items.isEmpty)
-          Card(child: ListTile(title: Text('Nothing in $title'))),
-        ...items.map(_itemCard),
-      ],
-    );
-  }
+class ItemCard extends StatelessWidget {
+  const ItemCard({super.key, required this.item, required this.onTap});
+  final InboxItem item;
+  final VoidCallback onTap;
 
-  Widget _itemCard(InboxItem item) {
+  @override
+  Widget build(BuildContext context) {
+    final due = item.fields.where((f) => f.label.contains('date')).toList();
     return Card(
-      child: ListTile(
-        title: Text(item.summary),
-        subtitle: Text(
-          '${_stateLabel(item.state)} • ${item.recommendedNextStep}',
-        ),
-        trailing: item.dueDate == null ? null : Text(_dateLabel(item.dueDate!)),
-        onTap: () => _openItemDetail(item),
-      ),
-    );
-  }
-
-  Future<void> _signIn() async {
-    setState(() => _signedIn = true);
-    await _persist();
-    _message('Signed in. You can start capturing items.');
-  }
-
-  Future<void> _showCaptureSheet() async {
-    if (!_signedIn) {
-      await _signIn();
-    }
-    if (!mounted) return;
-    _pasteController.clear();
-    _forwardedEmailController.text =
-        'Fwd: Subscription renewal\nMerchant: StreamBox\nRenews May 4, 2026\nAmount: \$12.99\nPlease review before your card is charged.';
-    // ignore: use_build_context_synchronously
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          16,
-          16,
-          MediaQuery.of(context).viewInsets.bottom + 16,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Capture a life-admin item',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _pickUpload,
-                  icon: const Icon(Icons.upload_file_outlined),
-                  label: const Text('Upload PDF/image'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _scanDoc,
-                  icon: const Icon(Icons.document_scanner_outlined),
-                  label: const Text('Scan paper doc'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _captureForwardedEmail();
-                  },
-                  icon: const Icon(Icons.forward_to_inbox_outlined),
-                  label: const Text('Forwarded email'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _pasteController,
-              minLines: 5,
-              maxLines: 8,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText:
-                    'Or paste a screenshot transcription, email body, or notice text',
-              ),
-            ),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () {
-                Navigator.pop(context);
-                final text = _pasteController.text.trim();
-                if (text.isEmpty) {
-                  _message('Paste or import something first.');
-                  return;
-                }
-                _reviewCapture(text, CaptureSourceType.share, 'Pasted capture');
-              },
-              child: const Text('Review capture'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _pickUpload() async {
-    Navigator.of(context).pop();
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['png', 'jpg', 'jpeg', 'pdf', 'txt'],
-      withData: true,
-    );
-    final file = result?.files.single;
-    if (file == null) return;
-    final text = (file.extension == 'txt' && file.bytes != null)
-        ? utf8.decode(file.bytes!)
-        : 'Uploaded ${file.name}. Add or edit the extracted text before saving.';
-    await _reviewCapture(
-      text,
-      CaptureSourceType.upload,
-      file.name,
-      sourcePath: file.path,
-    );
-  }
-
-  Future<void> _scanDoc() async {
-    Navigator.of(context).pop();
-    final photo = await _picker.pickImage(source: ImageSource.camera);
-    if (photo == null) return;
-    await _reviewCapture(
-      'Scanned paper mail. Paste or edit the extracted text.',
-      CaptureSourceType.scan,
-      photo.name,
-      sourcePath: photo.path,
-    );
-  }
-
-  Future<void> _captureForwardedEmail() async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Forwarded email inbox'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SelectableText(
-                'Your inbox address: alex@inbox.ai-life-admin.app',
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _forwardedFromController,
-                decoration: const InputDecoration(
-                  labelText: 'Original sender',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _forwardedReceivedController,
-                decoration: const InputDecoration(
-                  labelText: 'Received at',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _forwardedAttachmentController,
-                decoration: const InputDecoration(
-                  labelText: 'Forwarded attachment names',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _forwardedEmailController,
-                minLines: 6,
-                maxLines: 10,
-                decoration: const InputDecoration(
-                  labelText: 'Forwarded body',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final normalized = _normalizedForwardedEmail(
-                _forwardedFromController.text,
-                _forwardedReceivedController.text,
-                _forwardedAttachmentController.text,
-                _forwardedEmailController.text,
-              );
-              final existing = _items.any(
-                (item) =>
-                    item.sourceType == CaptureSourceType.forwardedEmail &&
-                    item.sourceText == normalized,
-              );
-              Navigator.pop(context);
-              if (existing) {
-                _message(
-                  'This forwarded message already exists in your inbox.',
-                );
-                return;
-              }
-              await _reviewCapture(
-                normalized,
-                CaptureSourceType.forwardedEmail,
-                'Forwarded email',
-              );
-            },
-            child: const Text('Review'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _normalizedForwardedEmail(
-    String from,
-    String receivedAt,
-    String attachments,
-    String body,
-  ) {
-    final lines = <String>[
-      'Forwarded to alex@inbox.ai-life-admin.app',
-      'From: ${from.trim()}',
-      'Received: ${receivedAt.trim()}',
-      if (attachments.trim().isNotEmpty) 'Attachments: ${attachments.trim()}',
-      '',
-      body.trim(),
-    ];
-    return lines.join('\n');
-  }
-
-  Future<void> _reviewCapture(
-    String text,
-    CaptureSourceType sourceType,
-    String sourceTitle, {
-    String? sourcePath,
-  }) async {
-    final draft = _parse(text, sourceType, sourceTitle, sourcePath: sourcePath);
-    final decision = await showModalBottomSheet<InboxItem>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => _ReviewSheet(draft: draft),
-    );
-    if (decision == null) return;
-    setState(() => _items.insert(0, decision));
-    await _persist();
-    _message('Saved to ${_stateLabel(decision.state)}.');
-  }
-
-  InboxItem _parse(
-    String text,
-    CaptureSourceType sourceType,
-    String sourceTitle, {
-    String? sourcePath,
-  }) {
-    final lower = text.toLowerCase();
-    final date = _extractDate(text);
-    final amountMatch = RegExp(r'\$\s?(\d+[\d,.]*)').firstMatch(text);
-    final amount = amountMatch == null ? null : '\$${amountMatch.group(1)}';
-    final provider = RegExp(
-      r'(?:provider|merchant|school|airline|hotel|from)[: ]+([A-Za-z0-9 &.-]+)',
-      caseSensitive: false,
-    ).firstMatch(text)?.group(1)?.trim();
-    final ref = RegExp(
-      r'(?:account|policy|reference|confirmation|claim)[#:\s-]*([A-Z0-9-]{3,})',
-      caseSensitive: false,
-    ).firstMatch(text)?.group(1);
-    final dueLikely =
-        lower.contains('due') ||
-        lower.contains('renew') ||
-        lower.contains('payment');
-    final infoOnly =
-        lower.contains('no action required') ||
-        lower.contains('for your records') ||
-        lower.contains('eob') ||
-        lower.contains('explanation of benefits');
-    final waiting = lower.contains('waiting') || lower.contains('follow up');
-    final school = lower.contains('school') || lower.contains('teacher');
-    final travel =
-        lower.contains('flight') ||
-        lower.contains('hotel') ||
-        lower.contains('airline');
-    final subscription =
-        lower.contains('subscription') || lower.contains('renewal');
-    final healthcare =
-        lower.contains('insurance') ||
-        lower.contains('medical') ||
-        lower.contains('claim') ||
-        lower.contains('eob');
-    final category = healthcare
-        ? TopicCategory.healthcare
-        : school
-        ? TopicCategory.school
-        : travel
-        ? TopicCategory.travel
-        : subscription
-        ? TopicCategory.subscriptions
-        : amount != null
-        ? TopicCategory.money
-        : TopicCategory.other;
-
-    final facts = <ExtractedFact>[
-      ExtractedFact(
-        label: dueLikely || subscription
-            ? 'Due date'
-            : travel
-            ? 'Event date'
-            : 'Date',
-        value: date == null ? 'Could not determine' : _dateLabel(date),
-        confidence: date == null
-            ? ConfidenceLevel.undetermined
-            : (dueLikely ? ConfidenceLevel.high : ConfidenceLevel.low),
-        isCritical: dueLikely || subscription,
-        evidence: EvidenceSnippet(
-          label: 'Source snippet',
-          text: _snippet(text, date == null ? 'date' : _dateLabel(date)),
-        ),
-      ),
-      if (amount != null)
-        ExtractedFact(
-          label: 'Amount',
-          value: amount,
-          confidence: ConfidenceLevel.high,
-          isCritical: true,
-          evidence: EvidenceSnippet(
-            label: 'Source snippet',
-            text: _snippet(text, amount),
-          ),
-        ),
-      if (provider != null)
-        ExtractedFact(
-          label: 'Provider',
-          value: provider,
-          confidence: ConfidenceLevel.low,
-          evidence: EvidenceSnippet(
-            label: 'Source snippet',
-            text: _snippet(text, provider),
-          ),
-        ),
-      if (ref != null)
-        ExtractedFact(
-          label: 'Reference number',
-          value: ref,
-          confidence: ConfidenceLevel.low,
-          evidence: EvidenceSnippet(
-            label: 'Source snippet',
-            text: _snippet(text, ref),
-          ),
-        ),
-    ];
-
-    final needsReview = facts.any(
-      (fact) => fact.isCritical && fact.confidence != ConfidenceLevel.high,
-    );
-    final urgent =
-        date != null &&
-        date.difference(DateTime.now()).inDays <= 2 &&
-        !infoOnly;
-    final state = infoOnly
-        ? ItemState.archived
-        : waiting
-        ? ItemState.waiting
-        : needsReview
-        ? ItemState.needsReview
-        : ItemState.inbox;
-
-    return InboxItem(
-      id: 'item-${DateTime.now().microsecondsSinceEpoch}',
-      sourceType: sourceType,
-      sourceTitle: sourceTitle,
-      sourceText: text,
-      sourcePath: sourcePath,
-      summary: infoOnly
-          ? 'Informational record captured and ready to archive.'
-          : waiting
-          ? 'Possible follow-up item captured. Decide when to check back.'
-          : dueLikely
-          ? 'Time-sensitive admin item extracted from your capture.'
-          : 'Captured item ready for triage.',
-      plainLanguageExplanation: infoOnly
-          ? 'This looks like a record, not a task, so archive is the safest default.'
-          : dueLikely
-          ? 'This appears to include a deadline or renewal, so the app suggests a reminder only after you confirm the date.'
-          : 'I found some useful facts, but you should decide the next step.',
-      recommendedNextStep: infoOnly
-          ? 'Archive as record'
-          : waiting
-          ? 'Create follow-up reminder'
-          : dueLikely
-          ? 'Confirm due date and reminder'
-          : 'Review and decide',
-      state: state,
-      category: category,
-      facts: facts,
-      createdAt: DateTime.now(),
-      documentType: infoOnly
-          ? 'record'
-          : subscription
-          ? 'subscription renewal'
-          : travel
-          ? 'travel confirmation'
-          : school
-          ? 'school notice'
-          : healthcare
-          ? 'insurance notice'
-          : dueLikely
-          ? 'bill or deadline notice'
-          : 'general capture',
-      dueDate: dueLikely ? date : null,
-      eventDate: travel ? date : null,
-      amount: amount,
-      provider: provider,
-      referenceNumber: ref,
-      urgent: urgent,
-      reminderLabel: dueLikely && date != null
-          ? 'Reminder recommendation pending user confirmation'
-          : null,
-      history: [TimelineEvent(label: 'Captured', at: DateTime.now())],
-    );
-  }
-
-  DateTime? _extractDate(String text) {
-    final now = DateTime.now();
-    final numeric = RegExp(r'(\d{1,2})/(\d{1,2})/(\d{2,4})').firstMatch(text);
-    if (numeric != null) {
-      final year = int.parse(numeric.group(3)!);
-      return DateTime(
-        year < 100 ? 2000 + year : year,
-        int.parse(numeric.group(1)!),
-        int.parse(numeric.group(2)!),
-      );
-    }
-    final monthName = RegExp(
-      r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,\s*(\d{4}))?',
-      caseSensitive: false,
-    ).firstMatch(text);
-    if (monthName != null) {
-      const months = {
-        'january': 1,
-        'february': 2,
-        'march': 3,
-        'april': 4,
-        'may': 5,
-        'june': 6,
-        'july': 7,
-        'august': 8,
-        'september': 9,
-        'october': 10,
-        'november': 11,
-        'december': 12,
-      };
-      return DateTime(
-        monthName.group(3) == null ? now.year : int.parse(monthName.group(3)!),
-        months[monthName.group(1)!.toLowerCase()]!,
-        int.parse(monthName.group(2)!),
-      );
-    }
-    return null;
-  }
-
-  String _snippet(String text, String needle) {
-    final lower = text.toLowerCase();
-    final matchIndex = lower.indexOf(needle.toLowerCase());
-    if (matchIndex < 0) return text.substring(0, min(text.length, 80));
-    final start = max(0, matchIndex - 24);
-    final end = min(text.length, matchIndex + needle.length + 24);
-    return text.substring(start, end).trim();
-  }
-
-  Future<void> _openItemDetail(InboxItem item) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) => Padding(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
           padding: const EdgeInsets.all(16),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.summary,
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 8),
-                Text(item.plainLanguageExplanation),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    Chip(label: Text(_stateLabel(item.state))),
-                    Chip(label: Text(item.documentType)),
-                    Chip(label: Text(item.category.name)),
-                    if (item.urgent) const Chip(label: Text('Urgent')),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Extracted facts',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                ...item.facts.map(
-                  (fact) => ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('${fact.label}: ${fact.value}'),
-                    subtitle: Text(
-                      'Confidence: ${fact.confidence.name} ${fact.evidence == null ? '' : '• ${fact.evidence!.text}'}',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Source preview',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.black12),
-                  ),
-                  child: Text(item.sourceText),
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton(
-                      onPressed: () async {
-                        setState(() {
-                          item.state = ItemState.scheduled;
-                          item.history = [
-                            ...item.history,
-                            TimelineEvent(
-                              label: 'Reminder confirmed',
-                              at: DateTime.now(),
-                            ),
-                          ];
-                        });
-                        setSheetState(() {});
-                        await _persist();
-                      },
-                      child: const Text('Confirm reminder'),
-                    ),
-                    OutlinedButton(
-                      onPressed: () async {
-                        setState(() {
-                          item.state = ItemState.waiting;
-                          item.history = [
-                            ...item.history,
-                            TimelineEvent(
-                              label: 'Follow-up reminder set',
-                              at: DateTime.now(),
-                            ),
-                          ];
-                        });
-                        setSheetState(() {});
-                        await _persist();
-                      },
-                      child: const Text('Follow up later'),
-                    ),
-                    OutlinedButton(
-                      onPressed: () async {
-                        setState(() {
-                          item.state = ItemState.archived;
-                          item.history = [
-                            ...item.history,
-                            TimelineEvent(
-                              label: 'Archived',
-                              at: DateTime.now(),
-                            ),
-                          ];
-                        });
-                        setSheetState(() {});
-                        await _persist();
-                      },
-                      child: const Text('Archive'),
-                    ),
-                    OutlinedButton(
-                      onPressed: () async {
-                        setState(() {
-                          item.state = ItemState.done;
-                          item.history = [
-                            ...item.history,
-                            TimelineEvent(
-                              label: 'Marked done',
-                              at: DateTime.now(),
-                            ),
-                          ];
-                        });
-                        setSheetState(() {});
-                        await _persist();
-                      },
-                      child: const Text('Mark done'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [Expanded(child: Text(item.title, style: Theme.of(context).textTheme.titleMedium)), StatusChip(label: item.processingState.name)]),
+            const SizedBox(height: 8),
+            Text(item.summary),
+            const SizedBox(height: 10),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              StatusChip(label: item.category.name),
+              StatusChip(label: item.workflowState.name),
+              if (due.isNotEmpty) StatusChip(label: due.first.value),
+            ]),
+          ]),
         ),
       ),
     );
   }
-
-  Future<void> _loadExample() async {
-    final item = _parse(
-      'School form reminder for Ava. Please return by 04/25/2026. Teacher: Ms. Chen. No payment needed.',
-      CaptureSourceType.share,
-      'Example school reminder',
-    );
-    setState(() => _items.insert(0, item));
-    await _persist();
-  }
-
-  void _message(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-  }
-
-  String _stateLabel(ItemState state) => switch (state) {
-    ItemState.newItem => 'New',
-    ItemState.needsReview => 'Needs review',
-    ItemState.inbox => 'Inbox',
-    ItemState.scheduled => 'Upcoming',
-    ItemState.waiting => 'Waiting',
-    ItemState.archived => 'Archived',
-    ItemState.done => 'Done',
-  };
-
-  String _dateLabel(DateTime date) => '${date.month}/${date.day}/${date.year}';
 }
 
-class _ReviewSheet extends StatefulWidget {
-  const _ReviewSheet({required this.draft});
-
-  final InboxItem draft;
-
-  @override
-  State<_ReviewSheet> createState() => _ReviewSheetState();
-}
-
-class _ReviewSheetState extends State<_ReviewSheet> {
-  late final TextEditingController _summaryController;
-  late final TextEditingController _explanationController;
-  late final TextEditingController _stepController;
-  late final Map<String, TextEditingController> _factControllers;
-
-  @override
-  void initState() {
-    super.initState();
-    _summaryController = TextEditingController(text: widget.draft.summary);
-    _explanationController = TextEditingController(
-      text: widget.draft.plainLanguageExplanation,
-    );
-    _stepController = TextEditingController(
-      text: widget.draft.recommendedNextStep,
-    );
-    _factControllers = {
-      for (final fact in widget.draft.facts)
-        fact.label: TextEditingController(text: fact.value),
-    };
-  }
-
-  @override
-  void dispose() {
-    _summaryController.dispose();
-    _explanationController.dispose();
-    _stepController.dispose();
-    for (final controller in _factControllers.values) {
-      controller.dispose();
-    }
-    super.dispose();
-  }
-
-  bool get _canSave {
-    final criticalFacts = widget.draft.facts.where((fact) => fact.isCritical);
-    return criticalFacts.every(
-      (fact) =>
-          !fact.isCritical ||
-          fact.confirmed ||
-          fact.confidence != ConfidenceLevel.high,
-    );
-  }
-
-  ExtractedFact? _factByLabel(String label) {
-    for (final fact in widget.draft.facts) {
-      if (fact.label == label) return fact;
-    }
-    return null;
-  }
-
-  DateTime? _tryParseEditedDate(String? value) {
-    if (value == null || value.isEmpty) return null;
-    final numeric = RegExp(
-      r'^(\d{1,2})/(\d{1,2})/(\d{4})$',
-    ).firstMatch(value.trim());
-    if (numeric != null) {
-      return DateTime(
-        int.parse(numeric.group(3)!),
-        int.parse(numeric.group(1)!),
-        int.parse(numeric.group(2)!),
-      );
-    }
-    return DateTime.tryParse(value);
-  }
+class ItemSheet extends StatelessWidget {
+  const ItemSheet({super.key, required this.item, required this.onChanged});
+  final InboxItem item;
+  final Future<void> Function(InboxItem) onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(
-        16,
-        16,
-        16,
-        MediaQuery.of(context).viewInsets.bottom + 16,
-      ),
+      padding: EdgeInsets.only(left: 20, right: 20, bottom: MediaQuery.of(context).viewInsets.bottom + 24),
       child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Review before saving',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _summaryController,
-              decoration: const InputDecoration(
-                labelText: 'Summary',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _explanationController,
-              minLines: 2,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                labelText: 'Plain-language explanation',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _stepController,
-              decoration: const InputDecoration(
-                labelText: 'Recommended next step',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            ...widget.draft.facts.map(
-              (fact) => Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('${fact.label}: ${fact.value}'),
-                      const SizedBox(height: 4),
-                      TextField(
-                        controller: _factControllers[fact.label],
-                        decoration: InputDecoration(
-                          labelText: 'Edit ${fact.label.toLowerCase()}',
-                          border: const OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text('Confidence: ${fact.confidence.name}'),
-                      if (fact.evidence != null) Text(fact.evidence!.text),
-                      if (fact.isCritical)
-                        CheckboxListTile(
-                          value: fact.confirmed,
-                          onChanged: fact.confidence == ConfidenceLevel.high
-                              ? (value) => setState(
-                                  () => fact.confirmed = value ?? false,
-                                )
-                              : null,
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            fact.confidence == ConfidenceLevel.high
-                                ? 'I confirm this critical field'
-                                : 'Needs review before auto-reminding',
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            if (!_canSave)
-              const ListTile(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(item.title, style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 8),
+          Text(item.summary),
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            StatusChip(label: 'processing: ${item.processingState.name}'),
+            StatusChip(label: 'workflow: ${item.workflowState.name}'),
+            StatusChip(label: 'channel: ${item.channel.name}'),
+          ]),
+          const SizedBox(height: 16),
+          Text('Suggested next step', style: Theme.of(context).textTheme.titleMedium),
+          Text(item.suggestedNextStep),
+          const SizedBox(height: 16),
+          Text('Extracted fields', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          ...item.fields.map((field) => ListTile(
                 contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.warning_amber_outlined),
-                title: Text(
-                  'Confirm critical high-confidence fields before saving a reminder',
-                ),
-              ),
+                title: Text('${field.label}: ${field.value}'),
+                subtitle: Text('${field.confidence.name} confidence • ${field.source}'),
+                trailing: field.unresolved ? const Icon(Icons.warning_amber_rounded) : null,
+              )),
+          const SizedBox(height: 12),
+          Text('Pipeline stages', style: Theme.of(context).textTheme.titleMedium),
+          ...item.stageNotes.map((note) => Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('• $note'),
+              )),
+          if (item.failureReason != null) ...[
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton(
-                  onPressed: _canSave
-                      ? () {
-                          widget.draft.summary = _summaryController.text.trim();
-                          widget.draft.plainLanguageExplanation =
-                              _explanationController.text.trim();
-                          widget.draft.recommendedNextStep = _stepController
-                              .text
-                              .trim();
-                          for (final fact in widget.draft.facts) {
-                            fact.value = _factControllers[fact.label]!.text
-                                .trim();
-                          }
-                          final dueFact = _factByLabel('Due date');
-                          final amountFact = _factByLabel('Amount');
-                          final providerFact = _factByLabel('Provider');
-                          final referenceFact = _factByLabel(
-                            'Reference number',
-                          );
-                          widget.draft.dueDate = _tryParseEditedDate(
-                            dueFact?.value,
-                          );
-                          widget.draft.amount = amountFact?.value;
-                          widget.draft.provider = providerFact?.value;
-                          widget.draft.referenceNumber = referenceFact?.value;
-                          if (widget.draft.state == ItemState.scheduled) {
-                            widget.draft.state = ItemState.inbox;
-                          }
-                          Navigator.pop(context, widget.draft);
-                        }
-                      : null,
-                  child: const Text('Save item'),
-                ),
-                OutlinedButton(
-                  onPressed: () {
-                    widget.draft.state = ItemState.archived;
-                    widget.draft.recommendedNextStep = 'Archive as record';
-                    Navigator.pop(context, widget.draft);
-                  },
-                  child: const Text('Archive instead'),
-                ),
-              ],
-            ),
+            Text('Failure handling', style: Theme.of(context).textTheme.titleMedium),
+            Text(item.failureReason!),
           ],
-        ),
+          if (item.duplicateOf != null) ...[
+            const SizedBox(height: 12),
+            Text('Duplicate handling', style: Theme.of(context).textTheme.titleMedium),
+            Text('Linked to ${item.duplicateOf}. No duplicate reminder or task was created.'),
+          ],
+          const SizedBox(height: 12),
+          Text('Source preview', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 6),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: const Color(0xFFF1F3F8), borderRadius: BorderRadius.circular(12)),
+            child: Text(item.rawPreview),
+          ),
+          const SizedBox(height: 16),
+          Text('Internal actions', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          ...item.actions.map((action) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(action.title),
+                subtitle: Text('${action.type.name} • ${action.dueAt?.toLocal() ?? 'No date'} • ${action.status}'),
+              )),
+          const SizedBox(height: 16),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            FilledButton(onPressed: () => _apply(context, item.copyWith(workflowState: WorkflowState.actioned, actions: [...item.actions, AdminAction(id: '${item.id}-r', type: ActionType.reminder, title: item.suggestedNextStep, dueAt: _extractDueDate(item), status: 'scheduled')])), child: const Text('Create reminder')),
+            OutlinedButton(onPressed: () => _apply(context, item.copyWith(workflowState: WorkflowState.actioned, actions: [...item.actions, AdminAction(id: '${item.id}-t', type: ActionType.task, title: item.suggestedNextStep, dueAt: null, status: 'open')])), child: const Text('Create task')),
+            OutlinedButton(onPressed: () => _apply(context, item.copyWith(workflowState: WorkflowState.done, processingState: ProcessingState.completed)), child: const Text('Mark done')),
+            OutlinedButton(onPressed: () => _apply(context, item.copyWith(workflowState: WorkflowState.archived)), child: const Text('Archive')),
+            TextButton(onPressed: () => _apply(context, item.copyWith(workflowState: WorkflowState.reviewed)), child: const Text('Reviewed')),
+          ]),
+          const SizedBox(height: 12),
+        ]),
       ),
+    );
+  }
+
+  DateTime? _extractDueDate(InboxItem item) {
+    final value = item.fields.where((f) => f.label == 'due date' || f.label == 'event date').map((f) => f.value).firstWhere((_) => true, orElse: () => '');
+    return DateTime.tryParse(value);
+  }
+
+  Future<void> _apply(BuildContext context, InboxItem next) async {
+    await onChanged(next);
+    if (context.mounted) Navigator.pop(context);
+  }
+}
+
+class StatusChip extends StatelessWidget {
+  const StatusChip({super.key, required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(999), border: Border.all(color: const Color(0xFFD7DCEA))),
+      child: Text(label),
     );
   }
 }
 
-List<InboxItem> _seedItems() {
-  final now = DateTime.now();
+class EmptyState extends StatelessWidget {
+  const EmptyState({super.key, required this.message});
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(child: Padding(padding: const EdgeInsets.all(20), child: Text(message)));
+  }
+}
+
+List<InboxItem> seedItems() {
   return [
-    InboxItem(
-      id: 'seed-1',
-      sourceType: CaptureSourceType.share,
-      sourceTitle: 'Electric bill screenshot',
-      sourceText: 'City Power. Amount due \$84.20 by 04/24/2026. Account 5519.',
-      summary: 'Utility bill captured and ready for confirmation.',
-      plainLanguageExplanation:
-          'This appears to be a bill with a clear amount and due date. Confirm the details before scheduling a reminder.',
-      recommendedNextStep: 'Confirm due date and reminder',
-      state: ItemState.scheduled,
-      category: TopicCategory.money,
-      createdAt: now.subtract(const Duration(hours: 3)),
-      dueDate: DateTime(2026, 4, 24),
-      amount: '\$84.20',
-      provider: 'City Power',
-      referenceNumber: '5519',
-      urgent: true,
-      reminderLabel: 'Primary reminder pending',
-      documentType: 'bill due notice',
-      facts: [
-        ExtractedFact(
-          label: 'Due date',
-          value: '4/24/2026',
-          confidence: ConfidenceLevel.high,
-          isCritical: true,
-          confirmed: true,
-          evidence: EvidenceSnippet(
-            label: 'Source snippet',
-            text: 'Amount due \$84.20 by 04/24/2026.',
-          ),
-        ),
-        ExtractedFact(
-          label: 'Amount',
-          value: '\$84.20',
-          confidence: ConfidenceLevel.high,
-          isCritical: true,
-          confirmed: true,
-          evidence: EvidenceSnippet(
-            label: 'Source snippet',
-            text: 'Amount due \$84.20 by 04/24/2026.',
-          ),
-        ),
-      ],
-      history: [
-        TimelineEvent(
-          label: 'Seeded example',
-          at: now.subtract(const Duration(hours: 3)),
-        ),
-      ],
-    ),
-    InboxItem(
-      id: 'seed-2',
-      sourceType: CaptureSourceType.forwardedEmail,
-      sourceTitle: 'Forwarded insurance EOB',
-      sourceText:
-          'Explanation of Benefits. For your records. No action required.',
-      summary: 'Insurance EOB saved as an informational record.',
-      plainLanguageExplanation:
-          'This looks informational, so archiving it is safer than creating unnecessary urgency.',
-      recommendedNextStep: 'Archive as record',
-      state: ItemState.archived,
-      category: TopicCategory.healthcare,
-      createdAt: now.subtract(const Duration(days: 1)),
-      documentType: 'insurance EOB',
-      facts: [
-        ExtractedFact(
-          label: 'Action required',
-          value: 'No clear action required',
-          confidence: ConfidenceLevel.low,
-          evidence: EvidenceSnippet(
-            label: 'Source snippet',
-            text: 'For your records. No action required.',
-          ),
-        ),
-      ],
-      history: [
-        TimelineEvent(
-          label: 'Seeded example',
-          at: now.subtract(const Duration(days: 1)),
-        ),
-      ],
-    ),
-    InboxItem(
-      id: 'seed-3',
-      sourceType: CaptureSourceType.scan,
-      sourceTitle: 'School form reminder',
-      sourceText: 'Please return the field trip form by April 28, 2026.',
-      summary:
-          'School form likely needs action, but the due date should be checked.',
-      plainLanguageExplanation:
-          'The app found a likely deadline and wants you to confirm it before creating reminders.',
-      recommendedNextStep: 'Review and confirm due date',
-      state: ItemState.needsReview,
-      category: TopicCategory.school,
-      createdAt: now.subtract(const Duration(hours: 8)),
-      documentType: 'school form reminder',
-      facts: [
-        ExtractedFact(
-          label: 'Due date',
-          value: '4/28/2026',
-          confidence: ConfidenceLevel.low,
-          isCritical: true,
-          evidence: EvidenceSnippet(
-            label: 'Source snippet',
-            text: 'return the field trip form by April 28, 2026.',
-          ),
-        ),
-      ],
-      history: [
-        TimelineEvent(
-          label: 'Seeded example',
-          at: now.subtract(const Duration(hours: 8)),
-        ),
-      ],
-    ),
+    _billItem(),
+    _bookingItem(),
+    _receiptItem(),
+    _failedItem(),
+    _duplicateItem(),
   ];
+}
+
+InboxItem generatedSample(IntakeChannel channel, List<InboxItem> existing) {
+  final generated = _formItem(channel: channel);
+  final duplicate = existing.any((item) => item.title == generated.title);
+  if (!duplicate) return generated;
+  return generated.copyWith(processingState: ProcessingState.duplicate).copyWith(workflowState: WorkflowState.reviewed);
+}
+
+InboxItem _billItem() {
+  final now = DateTime.now();
+  return InboxItem(
+    id: 'bill-1',
+    title: 'EnergyHub autopay notice',
+    summary: 'Utility bill due soon. The amount and due date were extracted with source snippets for review.',
+    category: ItemCategory.billPayment,
+    processingState: ProcessingState.needsReview,
+    workflowState: WorkflowState.newItem,
+    channel: IntakeChannel.emailForward,
+    receivedAt: now.subtract(const Duration(hours: 5)),
+    suggestedNextStep: 'Create a reminder 2 days before the due date.',
+    rawPreview: 'Your payment of \$84.12 is due on 2026-05-03. Please keep autopay details current.',
+    stageNotes: const [
+      'received',
+      'normalized forwarded email and attachment metadata',
+      'OCR/text extraction succeeded',
+      'classified as Bill / Payment',
+      'field extraction found due date, amount, provider, reference id',
+      'confidence scoring marked amount and due date high confidence',
+      'review-ready item created',
+    ],
+    fields: const [
+      ExtractedField(label: 'due date', value: '2026-05-03', confidence: ConfidenceLevel.high, source: '"due on 2026-05-03"'),
+      ExtractedField(label: 'amount', value: '\$84.12', confidence: ConfidenceLevel.high, source: '"payment of \$84.12"'),
+      ExtractedField(label: 'provider', value: 'EnergyHub', confidence: ConfidenceLevel.high, source: 'sender line'),
+      ExtractedField(label: 'reference id', value: 'EH-44021', confidence: ConfidenceLevel.medium, source: 'invoice footer'),
+    ],
+    actions: const [],
+  );
+}
+
+InboxItem _bookingItem() {
+  final now = DateTime.now();
+  return InboxItem(
+    id: 'booking-1',
+    title: 'CityCare dental appointment',
+    summary: 'Appointment confirmed. Event date is clear, but the check-in time is low confidence and left unresolved.',
+    category: ItemCategory.bookingAppointment,
+    processingState: ProcessingState.needsReview,
+    workflowState: WorkflowState.reviewed,
+    channel: IntakeChannel.upload,
+    receivedAt: now.subtract(const Duration(days: 1)),
+    suggestedNextStep: 'Create an internal reminder for the appointment.',
+    rawPreview: 'Appointment on May 8. Arrive at 8 or 9 AM depending on office confirmation.',
+    stageNotes: const [
+      'received',
+      'file normalization completed',
+      'OCR extracted readable text from uploaded photo',
+      'classified as Booking / Appointment',
+      'field extraction found event date and provider',
+      'confidence scoring flagged check-in time as low confidence',
+      'review-ready item created with unresolved field',
+    ],
+    fields: const [
+      ExtractedField(label: 'event date', value: '2026-05-08', confidence: ConfidenceLevel.high, source: '"Appointment on May 8"'),
+      ExtractedField(label: 'provider', value: 'CityCare Dental', confidence: ConfidenceLevel.high, source: 'header text'),
+      ExtractedField(label: 'amount', value: 'Not present', confidence: ConfidenceLevel.low, source: 'no amount found', unresolved: true),
+      ExtractedField(label: 'booking id', value: 'CC-APT-208', confidence: ConfidenceLevel.medium, source: 'confirmation block'),
+    ],
+    actions: const [AdminAction(id: 'booking-1-r', type: ActionType.reminder, title: 'Dental appointment reminder', dueAt: null, status: 'draft')],
+  );
+}
+
+InboxItem _receiptItem() {
+  final now = DateTime.now();
+  return InboxItem(
+    id: 'receipt-1',
+    title: 'LoopMart return window',
+    summary: 'Receipt processed with a likely return-by date and merchant. Suggest a task if you still want to return the item.',
+    category: ItemCategory.receiptReturn,
+    processingState: ProcessingState.needsReview,
+    workflowState: WorkflowState.waiting,
+    channel: IntakeChannel.upload,
+    receivedAt: now.subtract(const Duration(days: 2)),
+    suggestedNextStep: 'Create a task to decide on the return before the window closes.',
+    rawPreview: 'Purchased on Apr 25. Returns accepted within 14 days with receipt.',
+    stageNotes: const [
+      'received',
+      'file normalization completed',
+      'text extraction succeeded',
+      'classified as Receipt / Return',
+      'field extraction inferred return deadline from policy text',
+      'confidence scoring marked merchant high and date medium confidence',
+      'review-ready item created',
+    ],
+    fields: const [
+      ExtractedField(label: 'due date', value: '2026-05-09', confidence: ConfidenceLevel.medium, source: '"within 14 days"'),
+      ExtractedField(label: 'merchant', value: 'LoopMart', confidence: ConfidenceLevel.high, source: 'receipt header'),
+      ExtractedField(label: 'amount', value: '\$42.55', confidence: ConfidenceLevel.high, source: 'total line'),
+    ],
+    actions: const [],
+  );
+}
+
+InboxItem _formItem({IntakeChannel channel = IntakeChannel.upload}) {
+  final now = DateTime.now();
+  return InboxItem(
+    id: 'form-${now.microsecondsSinceEpoch}',
+    title: 'Parking permit renewal form',
+    summary: 'A new notice was ingested and summarized into one safe next step.',
+    category: ItemCategory.formNotice,
+    processingState: ProcessingState.needsReview,
+    workflowState: WorkflowState.newItem,
+    channel: channel,
+    receivedAt: now,
+    suggestedNextStep: 'Create a task to submit the renewal form this week.',
+    rawPreview: 'Renew by May 12 to avoid permit expiration. Fee due: \$15.',
+    stageNotes: const [
+      'received',
+      'normalization completed',
+      'OCR/text extraction succeeded',
+      'classified as Form / Notice',
+      'field extraction found due date and amount',
+      'confidence scoring marked due date high confidence',
+      'review-ready item created',
+    ],
+    fields: const [
+      ExtractedField(label: 'due date', value: '2026-05-12', confidence: ConfidenceLevel.high, source: '"Renew by May 12"'),
+      ExtractedField(label: 'amount', value: '\$15.00', confidence: ConfidenceLevel.high, source: '"Fee due: \$15"'),
+      ExtractedField(label: 'provider', value: 'City Parking', confidence: ConfidenceLevel.medium, source: 'header stamp'),
+    ],
+    actions: const [],
+  );
+}
+
+InboxItem _failedItem() {
+  return InboxItem(
+    id: 'failed-1',
+    title: 'Password-protected PDF',
+    summary: 'The file was preserved but could not be processed automatically.',
+    category: ItemCategory.other,
+    processingState: ProcessingState.failed,
+    workflowState: WorkflowState.archived,
+    channel: IntakeChannel.upload,
+    receivedAt: DateTime.now().subtract(const Duration(days: 3)),
+    suggestedNextStep: 'Unlock the file and re-upload it.',
+    rawPreview: 'Encrypted document detected.',
+    stageNotes: const [
+      'received',
+      'normalization failed during PDF text extraction',
+      'safe fallback preserved the original item',
+    ],
+    fields: const [],
+    actions: const [],
+    failureReason: 'Password-protected PDFs, oversized files, unreadable images, and unsupported types should fail safely with clear user guidance.',
+  );
+}
+
+InboxItem _duplicateItem() {
+  return InboxItem(
+    id: 'dup-1',
+    title: 'EnergyHub autopay notice',
+    summary: 'This item matched an earlier submission and was marked duplicate.',
+    category: ItemCategory.billPayment,
+    processingState: ProcessingState.duplicate,
+    workflowState: WorkflowState.archived,
+    channel: IntakeChannel.emailForward,
+    receivedAt: DateTime.now().subtract(const Duration(days: 4)),
+    suggestedNextStep: 'Review the original item instead of creating a second reminder.',
+    rawPreview: 'Duplicate forwarded email detected.',
+    stageNotes: const [
+      'received',
+      'normalized email metadata',
+      'duplicate heuristics matched title, amount, and due date',
+      'duplicate item created without extra actions',
+    ],
+    fields: const [],
+    actions: const [],
+    duplicateOf: 'bill-1',
+  );
 }

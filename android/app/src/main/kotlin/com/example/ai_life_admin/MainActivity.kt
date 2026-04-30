@@ -1,4 +1,4 @@
-package com.example.ai_life_admin
+package com.kluhads.ai_life_admin
 
 import io.flutter.embedding.android.FlutterActivity
 
