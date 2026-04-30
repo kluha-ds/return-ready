@@ -1,27 +1,61 @@
 import 'package:ai_life_admin/main.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('seed data covers key lifecycle and fallback states', () {
-    final items = seedItems();
+  test('pipeline marks duplicates and suppresses new action creation', () {
+    final first = pipelineOutcomeToItem(
+      runPipeline(
+        sourceText: 'City Power statement from City Power. Amount due \$84.20 by 04/24/2026. Account 5519.',
+        inputType: CaptureInputType.forwardedEmail,
+        existingItems: const [],
+      ),
+      'one',
+    );
 
-    expect(items.any((item) => item.processingState == ProcessingState.needsReview), isTrue);
-    expect(items.any((item) => item.processingState == ProcessingState.failed), isTrue);
-    expect(items.any((item) => item.processingState == ProcessingState.duplicate), isTrue);
+    final duplicate = runPipeline(
+      sourceText: 'City Power statement from City Power. Amount due \$84.20 by 04/24/2026. Account 5519.',
+      inputType: CaptureInputType.upload,
+      existingItems: [first],
+    );
+
+    expect(duplicate.processingState, ProcessingState.duplicate);
+    expect(duplicate.suggestedAction, ActionType.archive);
   });
 
-  test('bill item exposes auditable date and amount fields', () {
-    final bill = seedItems().firstWhere((item) => item.category == ItemCategory.billPayment);
+  test('pipeline returns spec-aligned stages and searchable fields', () {
+    final outcome = runPipeline(
+      sourceText: 'Dental booking confirmation from Bright Dental scheduled May 6. Reference BK-2201.',
+      inputType: CaptureInputType.upload,
+      existingItems: const [],
+    );
 
-    expect(bill.fields.any((field) => field.label == 'due date' && field.confidence == ConfidenceLevel.high), isTrue);
-    expect(bill.fields.any((field) => field.label == 'amount' && field.source.contains('\$84.12')), isTrue);
+    expect(outcome.category, ItemCategory.bookingAppointment);
+    expect(outcome.pipelineStages.map((stage) => stage.code), containsAll(['received', 'normalize', 'extract', 'classify', 'fields', 'action', 'confidence', 'review']));
+    expect(outcome.fields.any((field) => field.label == 'Provider / Sender'), isTrue);
+    expect(outcome.fields.any((field) => field.label == 'Suggested next step'), isTrue);
   });
 
-  test('generated sample produces review ready notice', () {
-    final sample = generatedSample(IntakeChannel.upload, const []);
+  testWidgets('review sheet keeps accept disabled until confirmations are checked', (tester) async {
+    final outcome = runPipeline(
+      sourceText: 'City Power statement from City Power. Amount due \$84.20 by 04/24/2026. Account 5519.',
+      inputType: CaptureInputType.forwardedEmail,
+      existingItems: const [],
+    );
 
-    expect(sample.processingState, ProcessingState.needsReview);
-    expect(sample.category, ItemCategory.formNotice);
-    expect(sample.suggestedNextStep, contains('task'));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ReviewSheet(initial: outcome, sourceText: 'City Power statement from City Power. Amount due \$84.20 by 04/24/2026. Account 5519.'))));
+
+    final acceptBefore = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Accept'));
+    expect(acceptBefore.onPressed, isNull);
+
+    await tester.ensureVisible(find.byType(CheckboxListTile).first);
+    await tester.tap(find.byType(CheckboxListTile).first);
+    await tester.pump();
+    await tester.ensureVisible(find.byType(CheckboxListTile).last);
+    await tester.tap(find.byType(CheckboxListTile).last);
+    await tester.pump();
+
+    final acceptAfter = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Accept'));
+    expect(acceptAfter.onPressed, isNotNull);
   });
 }
