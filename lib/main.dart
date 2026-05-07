@@ -1,4 +1,6 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'demo_data.dart';
@@ -41,6 +43,7 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
   PlanBundle? _bundle;
   int _tab = 0;
   final _pantryAutocompleteController = TextEditingController();
+  String? _shoppingFeedback;
 
   @override
   void dispose() {
@@ -191,7 +194,11 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
         clarifiers: _bundle?.clarifiers ?? const [],
         onViewMeal: _showMealDetails,
       ),
-      ShoppingScreen(bundle: _bundle),
+      ShoppingScreen(
+        bundle: _bundle,
+        feedback: _shoppingFeedback,
+        onCopy: _copyShoppingList,
+      ),
       LeftoversScreen(bundle: _bundle),
     ];
 
@@ -223,6 +230,23 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
     );
     if (action == null) return;
     await _reroll(meal, action.type, argument: action.argument);
+  }
+
+  Future<void> _copyShoppingList() async {
+    if (_bundle == null) return;
+    final lines = <String>['AI Home Food Planner shopping list'];
+    for (final entry in _bundle!.shoppingList.entries) {
+      lines.add('');
+      lines.add(entry.key.name.toUpperCase());
+      for (final item in entry.value) {
+        final suffix = item.isCheckIfHave ? ' (check if you have)' : '';
+        lines.add('- ${item.name}: ${item.quantity}$suffix');
+      }
+    }
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    setState(
+      () => _shoppingFeedback = 'Copied a share-ready list to clipboard.',
+    );
   }
 }
 
@@ -393,6 +417,7 @@ class PantryScreen extends StatefulWidget {
 class _PantryScreenState extends State<PantryScreen> {
   QuantityState _quantityState = QuantityState.some;
   ItemUrgency _urgency = ItemUrgency.unknown;
+  String? _photoLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -514,8 +539,15 @@ class _PantryScreenState extends State<PantryScreen> {
                   onPressed: () =>
                       _showPhotoSuggestionSheet(context, widget.onAdd),
                   icon: const Icon(Icons.photo_camera_back_outlined),
-                  label: const Text('Photo suggestions only'),
+                  label: const Text('Upload pantry photo'),
                 ),
+                if (_photoLabel != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Latest photo: $_photoLabel',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ],
             ),
           ),
@@ -562,6 +594,16 @@ class _PantryScreenState extends State<PantryScreen> {
     BuildContext context,
     ValueChanged<PantryItem> onAdd,
   ) async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.single;
+    final suggestions = _photoSuggestionsForFile(file.name, file.bytes);
+    if (!mounted) return;
+    setState(() => _photoLabel = file.name);
+    if (!context.mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       builder: (context) => SafeArea(
@@ -576,14 +618,14 @@ class _PantryScreenState extends State<PantryScreen> {
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Prototype behavior: these are suggestions only, nothing is added until you confirm it.',
+              Text(
+                'Picked ${file.name}. These suggestions are optional and nothing is added until you confirm it.',
               ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: ['spinach', 'yogurt', 'carrots'].map((name) {
+                children: suggestions.map((name) {
                   return FilledButton.tonal(
                     onPressed: () {
                       onAdd(
@@ -607,6 +649,34 @@ class _PantryScreenState extends State<PantryScreen> {
         ),
       ),
     );
+  }
+
+  List<String> _photoSuggestionsForFile(String name, Uint8List? bytes) {
+    final lowered = name.toLowerCase();
+    final suggestions = <String>{};
+    final keywordMap = {
+      'spin': 'spinach',
+      'broc': 'broccoli',
+      'carrot': 'carrots',
+      'pepper': 'bell pepper',
+      'yogurt': 'yogurt',
+      'egg': 'eggs',
+      'rice': 'rice',
+      'chicken': 'chicken',
+      'cheddar': 'cheddar',
+    };
+    keywordMap.forEach((keyword, item) {
+      if (lowered.contains(keyword)) {
+        suggestions.add(item);
+      }
+    });
+    if (suggestions.isEmpty && bytes != null && bytes.isNotEmpty) {
+      suggestions.addAll(['spinach', 'carrots', 'yogurt']);
+    }
+    if (suggestions.isEmpty) {
+      suggestions.addAll(['spinach', 'carrots', 'yogurt']);
+    }
+    return suggestions.toList()..sort();
   }
 }
 
@@ -696,9 +766,16 @@ class PlanScreen extends StatelessWidget {
 }
 
 class ShoppingScreen extends StatelessWidget {
-  const ShoppingScreen({super.key, required this.bundle});
+  const ShoppingScreen({
+    super.key,
+    required this.bundle,
+    required this.feedback,
+    required this.onCopy,
+  });
 
   final PlanBundle? bundle;
+  final String? feedback;
+  final VoidCallback onCopy;
 
   @override
   Widget build(BuildContext context) {
@@ -709,33 +786,64 @@ class ShoppingScreen extends StatelessWidget {
     }
     return ListView(
       padding: const EdgeInsets.all(16),
-      children: bundle!.shoppingList.entries.map((entry) {
-        return Card(
+      children: [
+        Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  entry.key.name.toUpperCase(),
-                  style: Theme.of(context).textTheme.titleMedium,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Gap-only shopping list',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: onCopy,
+                      icon: const Icon(Icons.copy_all_outlined),
+                      label: const Text('Copy list'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                ...entry.value.map(
-                  (item) => ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(item.name),
-                    subtitle: Text(item.quantity),
-                    trailing: item.isCheckIfHave
-                        ? const Chip(label: Text('check if you have'))
-                        : null,
-                  ),
-                ),
+                if (feedback != null) ...[
+                  const SizedBox(height: 8),
+                  Text(feedback!),
+                ],
               ],
             ),
           ),
-        );
-      }).toList(),
+        ),
+        ...bundle!.shoppingList.entries.map((entry) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    entry.key.name.toUpperCase(),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  ...entry.value.map(
+                    (item) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(item.name),
+                      subtitle: Text(item.quantity),
+                      trailing: item.isCheckIfHave
+                          ? const Chip(label: Text('check if you have'))
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
     );
   }
 }

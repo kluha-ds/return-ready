@@ -140,19 +140,30 @@ PlannedMeal _toPlannedMeal(
   final usedSoonItems = <String>[];
 
   for (final ingredient in template.ingredients) {
+    final scaledIngredient = _scaleIngredientForHousehold(
+      ingredient,
+      preferences.householdSize,
+    );
     final normalized = _normalize(ingredient.name);
     if (pantryNames.contains(normalized)) {
-      pantryUsed.add(ingredient.name);
+      pantryUsed.add(scaledIngredient.name);
       if (useSoonNames.contains(normalized)) {
-        usedSoonItems.add(ingredient.name);
+        usedSoonItems.add(scaledIngredient.name);
       }
     } else if (ingredient.optionalStaple ||
         kStapleIngredients.contains(normalized)) {
-      checkIfYouHave.add(ingredient);
+      checkIfYouHave.add(scaledIngredient);
     } else {
-      buyNeeded.add(ingredient);
+      buyNeeded.add(scaledIngredient);
     }
   }
+
+  final scaledIngredients = template.ingredients
+      .map(
+        (ingredient) =>
+            _scaleIngredientForHousehold(ingredient, preferences.householdSize),
+      )
+      .toList();
 
   final reasonBits = <String>[];
   if (pantryUsed.isNotEmpty) {
@@ -175,6 +186,7 @@ PlannedMeal _toPlannedMeal(
       reasonBits.add('${template.minutes} min weeknight option');
       break;
   }
+  reasonBits.add('scaled for ${preferences.householdSize}');
 
   return PlannedMeal(
     templateId: template.id,
@@ -182,13 +194,41 @@ PlannedMeal _toPlannedMeal(
     pattern: template.pattern,
     rationale: reasonBits.join(', '),
     minutes: template.minutes,
-    ingredients: template.ingredients,
+    ingredients: scaledIngredients,
     steps: template.steps,
     pantryUsed: pantryUsed,
     buyNeeded: buyNeeded,
     checkIfYouHave: checkIfYouHave,
     usedSoonItems: usedSoonItems,
   );
+}
+
+MealIngredient _scaleIngredientForHousehold(
+  MealIngredient ingredient,
+  int householdSize,
+) {
+  final scaledQuantity = _scaleQuantity(ingredient.quantity, householdSize);
+  if (scaledQuantity == ingredient.quantity) {
+    return ingredient;
+  }
+  return MealIngredient(
+    name: ingredient.name,
+    quantity: scaledQuantity,
+    aisle: ingredient.aisle,
+    optionalStaple: ingredient.optionalStaple,
+  );
+}
+
+String _scaleQuantity(String quantity, int householdSize) {
+  if (householdSize <= 2) return quantity;
+  final match = RegExp(r'^(\d+)\s+(.+)$').firstMatch(quantity.trim());
+  if (match == null) return quantity;
+  final baseCount = int.tryParse(match.group(1)!);
+  final unit = match.group(2)!;
+  if (baseCount == null) return quantity;
+  final multiplier = householdSize / 2;
+  final scaledCount = (baseCount * multiplier).ceil();
+  return '$scaledCount $unit';
 }
 
 Map<Aisle, List<ShoppingListItem>> buildShoppingList(List<PlannedMeal> meals) {

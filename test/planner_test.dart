@@ -86,4 +86,25 @@ void main() {
 
     expect(updated.ingredients.any((item) => item.name == 'rice'), isTrue);
   });
+
+  test('planner scales ingredient quantities for larger households', () {
+    final state = seedPlannerState().copyWith(
+      preferences: seedPlannerState().preferences.copyWith(householdSize: 4),
+    );
+
+    final bundle = buildPlan(
+      preferences: state.preferences,
+      pantry: state.pantry,
+    );
+
+    final stirFry = bundle.meals.firstWhere(
+      (meal) => meal.templateId == 'chicken_stir_fry',
+    );
+    final chicken = stirFry.ingredients.firstWhere(
+      (item) => item.name == 'chicken',
+    );
+
+    expect(chicken.quantity, '2 lb');
+    expect(stirFry.rationale, contains('scaled for 4'));
+  });
 }
