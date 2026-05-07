@@ -223,10 +223,17 @@ class MealTemplate {
       costRank: json['costRank'] as int,
       healthRank: json['healthRank'] as int,
       ingredients: ((json['ingredients'] as List?) ?? const [])
-          .map((item) => MealIngredient.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                MealIngredient.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(),
-      steps: ((json['steps'] as List?) ?? const []).map((item) => item.toString()).toList(),
-      tags: ((json['tags'] as List?) ?? const []).map((item) => item.toString()).toList(),
+      steps: ((json['steps'] as List?) ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+      tags: ((json['tags'] as List?) ?? const [])
+          .map((item) => item.toString())
+          .toList(),
       vegetarian: json['vegetarian'] as bool? ?? false,
     );
   }
@@ -281,17 +288,32 @@ class PlannedMeal {
       rationale: json['rationale'] as String,
       minutes: json['minutes'] as int,
       ingredients: ((json['ingredients'] as List?) ?? const [])
-          .map((item) => MealIngredient.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                MealIngredient.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(),
-      steps: ((json['steps'] as List?) ?? const []).map((item) => item.toString()).toList(),
-      pantryUsed: ((json['pantryUsed'] as List?) ?? const []).map((item) => item.toString()).toList(),
+      steps: ((json['steps'] as List?) ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+      pantryUsed: ((json['pantryUsed'] as List?) ?? const [])
+          .map((item) => item.toString())
+          .toList(),
       buyNeeded: ((json['buyNeeded'] as List?) ?? const [])
-          .map((item) => MealIngredient.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                MealIngredient.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(),
       checkIfYouHave: ((json['checkIfYouHave'] as List?) ?? const [])
-          .map((item) => MealIngredient.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                MealIngredient.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(),
-      usedSoonItems: ((json['usedSoonItems'] as List?) ?? const []).map((item) => item.toString()).toList(),
+      usedSoonItems: ((json['usedSoonItems'] as List?) ?? const [])
+          .map((item) => item.toString())
+          .toList(),
     );
   }
 }
@@ -369,10 +391,16 @@ class PlannerState {
         Map<String, dynamic>.from(json['preferences'] as Map? ?? const {}),
       ),
       pantry: ((json['pantry'] as List?) ?? const [])
-          .map((item) => PantryItem.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                PantryItem.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(),
       plan: ((json['plan'] as List?) ?? const [])
-          .map((item) => PlannedMeal.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                PlannedMeal.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(),
       lastPlanSummary: json['lastPlanSummary'] as String? ?? '',
     );
@@ -380,6 +408,7 @@ class PlannerState {
 
   String encode() => jsonEncode(toJson());
 
-  factory PlannerState.decode(String source) =>
-      PlannerState.fromJson(Map<String, dynamic>.from(jsonDecode(source) as Map));
+  factory PlannerState.decode(String source) => PlannerState.fromJson(
+    Map<String, dynamic>.from(jsonDecode(source) as Map),
+  );
 }

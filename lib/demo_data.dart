@@ -93,10 +93,23 @@ List<MealTemplate> buildMealTemplates() {
       tags: <String>['weeknight', 'stir-fry', 'pantry-first'],
       ingredients: <MealIngredient>[
         MealIngredient(name: 'chicken', quantity: '1 lb', aisle: Aisle.protein),
-        MealIngredient(name: 'broccoli', quantity: '2 heads', aisle: Aisle.produce),
+        MealIngredient(
+          name: 'broccoli',
+          quantity: '2 heads',
+          aisle: Aisle.produce,
+        ),
         MealIngredient(name: 'rice', quantity: '1 bag', aisle: Aisle.pantry),
-        MealIngredient(name: 'soy sauce', quantity: '1 bottle', aisle: Aisle.pantry, optionalStaple: true),
-        MealIngredient(name: 'garlic', quantity: '1 bulb', aisle: Aisle.produce),
+        MealIngredient(
+          name: 'soy sauce',
+          quantity: '1 bottle',
+          aisle: Aisle.pantry,
+          optionalStaple: true,
+        ),
+        MealIngredient(
+          name: 'garlic',
+          quantity: '1 bulb',
+          aisle: Aisle.produce,
+        ),
       ],
       steps: <String>[
         'Cook the rice first so it is ready when the stir-fry finishes.',
@@ -116,12 +129,37 @@ List<MealTemplate> buildMealTemplates() {
       vegetarian: true,
       tags: <String>['tacos', 'cheap', 'vegetarian'],
       ingredients: <MealIngredient>[
-        MealIngredient(name: 'black beans', quantity: '2 cans', aisle: Aisle.pantry),
-        MealIngredient(name: 'tortillas', quantity: '1 pack', aisle: Aisle.bakery),
-        MealIngredient(name: 'bell pepper', quantity: '2 peppers', aisle: Aisle.produce),
-        MealIngredient(name: 'onion', quantity: '1 onion', aisle: Aisle.produce),
-        MealIngredient(name: 'cheddar', quantity: '1 bag shredded', aisle: Aisle.dairy),
-        MealIngredient(name: 'cumin', quantity: '1 jar', aisle: Aisle.pantry, optionalStaple: true),
+        MealIngredient(
+          name: 'black beans',
+          quantity: '2 cans',
+          aisle: Aisle.pantry,
+        ),
+        MealIngredient(
+          name: 'tortillas',
+          quantity: '1 pack',
+          aisle: Aisle.bakery,
+        ),
+        MealIngredient(
+          name: 'bell pepper',
+          quantity: '2 peppers',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'onion',
+          quantity: '1 onion',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'cheddar',
+          quantity: '1 bag shredded',
+          aisle: Aisle.dairy,
+        ),
+        MealIngredient(
+          name: 'cumin',
+          quantity: '1 jar',
+          aisle: Aisle.pantry,
+          optionalStaple: true,
+        ),
       ],
       steps: <String>[
         'Saute sliced onion and bell pepper until tender.',
@@ -140,11 +178,33 @@ List<MealTemplate> buildMealTemplates() {
       vegetarian: false,
       tags: <String>['sheet-pan', 'fast cleanup'],
       ingredients: <MealIngredient>[
-        MealIngredient(name: 'chicken sausage', quantity: '1 pack', aisle: Aisle.protein),
-        MealIngredient(name: 'potatoes', quantity: '1 bag', aisle: Aisle.produce),
-        MealIngredient(name: 'broccoli', quantity: '1 head', aisle: Aisle.produce),
-        MealIngredient(name: 'olive oil', quantity: '1 bottle', aisle: Aisle.pantry, optionalStaple: true),
-        MealIngredient(name: 'paprika', quantity: '1 jar', aisle: Aisle.pantry, optionalStaple: true),
+        MealIngredient(
+          name: 'chicken sausage',
+          quantity: '1 pack',
+          aisle: Aisle.protein,
+        ),
+        MealIngredient(
+          name: 'potatoes',
+          quantity: '1 bag',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'broccoli',
+          quantity: '1 head',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'olive oil',
+          quantity: '1 bottle',
+          aisle: Aisle.pantry,
+          optionalStaple: true,
+        ),
+        MealIngredient(
+          name: 'paprika',
+          quantity: '1 jar',
+          aisle: Aisle.pantry,
+          optionalStaple: true,
+        ),
       ],
       steps: <String>[
         'Heat the oven to 425 F.',
@@ -164,9 +224,21 @@ List<MealTemplate> buildMealTemplates() {
       tags: <String>['eggs', 'leftovers', 'fast'],
       ingredients: <MealIngredient>[
         MealIngredient(name: 'eggs', quantity: '1 dozen', aisle: Aisle.dairy),
-        MealIngredient(name: 'spinach', quantity: '1 box', aisle: Aisle.produce),
-        MealIngredient(name: 'cheddar', quantity: '1 bag shredded', aisle: Aisle.dairy),
-        MealIngredient(name: 'onion', quantity: '1 onion', aisle: Aisle.produce),
+        MealIngredient(
+          name: 'spinach',
+          quantity: '1 box',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'cheddar',
+          quantity: '1 bag shredded',
+          aisle: Aisle.dairy,
+        ),
+        MealIngredient(
+          name: 'onion',
+          quantity: '1 onion',
+          aisle: Aisle.produce,
+        ),
       ],
       steps: <String>[
         'Saute onion and spinach until the spinach wilts.',
@@ -185,11 +257,28 @@ List<MealTemplate> buildMealTemplates() {
       vegetarian: true,
       tags: <String>['curry', 'warm', 'vegetarian'],
       ingredients: <MealIngredient>[
-        MealIngredient(name: 'chickpeas', quantity: '2 cans', aisle: Aisle.pantry),
-        MealIngredient(name: 'coconut milk', quantity: '1 can', aisle: Aisle.pantry),
-        MealIngredient(name: 'spinach', quantity: '1 box', aisle: Aisle.produce),
+        MealIngredient(
+          name: 'chickpeas',
+          quantity: '2 cans',
+          aisle: Aisle.pantry,
+        ),
+        MealIngredient(
+          name: 'coconut milk',
+          quantity: '1 can',
+          aisle: Aisle.pantry,
+        ),
+        MealIngredient(
+          name: 'spinach',
+          quantity: '1 box',
+          aisle: Aisle.produce,
+        ),
         MealIngredient(name: 'rice', quantity: '1 bag', aisle: Aisle.pantry),
-        MealIngredient(name: 'curry powder', quantity: '1 jar', aisle: Aisle.pantry, optionalStaple: true),
+        MealIngredient(
+          name: 'curry powder',
+          quantity: '1 jar',
+          aisle: Aisle.pantry,
+          optionalStaple: true,
+        ),
       ],
       steps: <String>[
         'Start rice if needed.',
@@ -208,10 +297,22 @@ List<MealTemplate> buildMealTemplates() {
       vegetarian: false,
       tags: <String>['pasta', 'comfort'],
       ingredients: <MealIngredient>[
-        MealIngredient(name: 'ground turkey', quantity: '1 lb', aisle: Aisle.protein),
+        MealIngredient(
+          name: 'ground turkey',
+          quantity: '1 lb',
+          aisle: Aisle.protein,
+        ),
         MealIngredient(name: 'pasta', quantity: '1 box', aisle: Aisle.pantry),
-        MealIngredient(name: 'spinach', quantity: '1 box', aisle: Aisle.produce),
-        MealIngredient(name: 'marinara', quantity: '1 jar', aisle: Aisle.pantry),
+        MealIngredient(
+          name: 'spinach',
+          quantity: '1 box',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'marinara',
+          quantity: '1 jar',
+          aisle: Aisle.pantry,
+        ),
         MealIngredient(name: 'parmesan', quantity: '1 tub', aisle: Aisle.dairy),
       ],
       steps: <String>[
@@ -233,8 +334,16 @@ List<MealTemplate> buildMealTemplates() {
       ingredients: <MealIngredient>[
         MealIngredient(name: 'salmon', quantity: '1 lb', aisle: Aisle.protein),
         MealIngredient(name: 'rice', quantity: '1 bag', aisle: Aisle.pantry),
-        MealIngredient(name: 'cucumber', quantity: '1 cucumber', aisle: Aisle.produce),
-        MealIngredient(name: 'carrots', quantity: '1 bag', aisle: Aisle.produce),
+        MealIngredient(
+          name: 'cucumber',
+          quantity: '1 cucumber',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'carrots',
+          quantity: '1 bag',
+          aisle: Aisle.produce,
+        ),
         MealIngredient(name: 'yogurt', quantity: '1 tub', aisle: Aisle.dairy),
       ],
       steps: <String>[
@@ -255,10 +364,26 @@ List<MealTemplate> buildMealTemplates() {
       tags: <String>['soup', 'cheap', 'leftovers'],
       ingredients: <MealIngredient>[
         MealIngredient(name: 'lentils', quantity: '1 bag', aisle: Aisle.pantry),
-        MealIngredient(name: 'carrots', quantity: '1 bag', aisle: Aisle.produce),
-        MealIngredient(name: 'celery', quantity: '1 bunch', aisle: Aisle.produce),
-        MealIngredient(name: 'onion', quantity: '1 onion', aisle: Aisle.produce),
-        MealIngredient(name: 'diced tomatoes', quantity: '2 cans', aisle: Aisle.pantry),
+        MealIngredient(
+          name: 'carrots',
+          quantity: '1 bag',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'celery',
+          quantity: '1 bunch',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'onion',
+          quantity: '1 onion',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'diced tomatoes',
+          quantity: '2 cans',
+          aisle: Aisle.pantry,
+        ),
       ],
       steps: <String>[
         'Saute onion, carrots, and celery until softened.',
@@ -278,10 +403,22 @@ List<MealTemplate> buildMealTemplates() {
       tags: <String>['wraps', 'fast'],
       ingredients: <MealIngredient>[
         MealIngredient(name: 'chicken', quantity: '1 lb', aisle: Aisle.protein),
-        MealIngredient(name: 'tortillas', quantity: '1 pack', aisle: Aisle.bakery),
-        MealIngredient(name: 'cucumber', quantity: '1 cucumber', aisle: Aisle.produce),
+        MealIngredient(
+          name: 'tortillas',
+          quantity: '1 pack',
+          aisle: Aisle.bakery,
+        ),
+        MealIngredient(
+          name: 'cucumber',
+          quantity: '1 cucumber',
+          aisle: Aisle.produce,
+        ),
         MealIngredient(name: 'yogurt', quantity: '1 tub', aisle: Aisle.dairy),
-        MealIngredient(name: 'lettuce', quantity: '1 head', aisle: Aisle.produce),
+        MealIngredient(
+          name: 'lettuce',
+          quantity: '1 head',
+          aisle: Aisle.produce,
+        ),
       ],
       steps: <String>[
         'Cook the chicken in strips with simple seasoning.',
@@ -302,9 +439,22 @@ List<MealTemplate> buildMealTemplates() {
       ingredients: <MealIngredient>[
         MealIngredient(name: 'rice', quantity: '1 bag', aisle: Aisle.pantry),
         MealIngredient(name: 'eggs', quantity: '1 dozen', aisle: Aisle.dairy),
-        MealIngredient(name: 'carrots', quantity: '1 bag', aisle: Aisle.produce),
-        MealIngredient(name: 'peas', quantity: '1 bag frozen', aisle: Aisle.frozen),
-        MealIngredient(name: 'soy sauce', quantity: '1 bottle', aisle: Aisle.pantry, optionalStaple: true),
+        MealIngredient(
+          name: 'carrots',
+          quantity: '1 bag',
+          aisle: Aisle.produce,
+        ),
+        MealIngredient(
+          name: 'peas',
+          quantity: '1 bag frozen',
+          aisle: Aisle.frozen,
+        ),
+        MealIngredient(
+          name: 'soy sauce',
+          quantity: '1 bottle',
+          aisle: Aisle.pantry,
+          optionalStaple: true,
+        ),
       ],
       steps: <String>[
         'Use cooked rice if you have it, or cook rice ahead and let it steam dry.',
