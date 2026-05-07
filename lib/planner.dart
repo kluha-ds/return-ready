@@ -26,15 +26,22 @@ PlanBundle buildPlan({
     if (preferences.dietType == DietType.vegetarian && !template.vegetarian) {
       return false;
     }
-    final banned = {...preferences.exclusions, ...preferences.dislikes}
-        .map(_normalize)
-        .toSet();
-    return !template.ingredients.any((item) => banned.contains(_normalize(item.name)));
+    final banned = {
+      ...preferences.exclusions,
+      ...preferences.dislikes,
+    }.map(_normalize).toSet();
+    return !template.ingredients.any(
+      (item) => banned.contains(_normalize(item.name)),
+    );
   }).toList();
 
-  filtered.sort((a, b) => _scoreTemplate(b, pantry, preferences).compareTo(
-        _scoreTemplate(a, pantry, preferences),
-      ));
+  filtered.sort(
+    (a, b) => _scoreTemplate(
+      b,
+      pantry,
+      preferences,
+    ).compareTo(_scoreTemplate(a, pantry, preferences)),
+  );
 
   final selected = <MealTemplate>[];
   final usedPatterns = <String, int>{};
@@ -43,7 +50,9 @@ PlanBundle buildPlan({
     final count = usedPatterns[template.pattern] ?? 0;
     if (count > 0 && selected.length < preferences.dinnerCount - 1) {
       final hasAlternative = filtered.any(
-        (candidate) => !selected.contains(candidate) && candidate.pattern != template.pattern,
+        (candidate) =>
+            !selected.contains(candidate) &&
+            candidate.pattern != template.pattern,
       );
       if (hasAlternative) continue;
     }
@@ -51,7 +60,9 @@ PlanBundle buildPlan({
     usedPatterns[template.pattern] = count + 1;
   }
 
-  final meals = selected.map((template) => _toPlannedMeal(template, pantry, preferences)).toList();
+  final meals = selected
+      .map((template) => _toPlannedMeal(template, pantry, preferences))
+      .toList();
   final shopping = buildShoppingList(meals);
   final leftovers = buildLeftoverSummary(meals, pantry);
   final clarifiers = suggestClarifiers(pantry, meals);
@@ -68,16 +79,28 @@ PlanBundle buildPlan({
   );
 }
 
-int _scoreTemplate(MealTemplate template, List<PantryItem> pantry, Preferences preferences) {
+int _scoreTemplate(
+  MealTemplate template,
+  List<PantryItem> pantry,
+  Preferences preferences,
+) {
   final pantryNames = pantry.map((item) => _normalize(item.name)).toSet();
   final useSoonNames = pantry
       .where((item) => item.urgency == ItemUrgency.useSoon)
       .map((item) => _normalize(item.name))
       .toSet();
-  final reuseCount = template.ingredients.where((item) => pantryNames.contains(_normalize(item.name))).length;
-  final useSoonCount = template.ingredients.where((item) => useSoonNames.contains(_normalize(item.name))).length;
+  final reuseCount = template.ingredients
+      .where((item) => pantryNames.contains(_normalize(item.name)))
+      .length;
+  final useSoonCount = template.ingredients
+      .where((item) => useSoonNames.contains(_normalize(item.name)))
+      .length;
   final missingCount = template.ingredients
-      .where((item) => !pantryNames.contains(_normalize(item.name)) && !item.optionalStaple)
+      .where(
+        (item) =>
+            !pantryNames.contains(_normalize(item.name)) &&
+            !item.optionalStaple,
+      )
       .length;
 
   var score = reuseCount * 12 + useSoonCount * 8 - missingCount * 5;
@@ -95,11 +118,17 @@ int _scoreTemplate(MealTemplate template, List<PantryItem> pantry, Preferences p
       score += template.healthRank * 2 + (6 - template.costRank) * 2;
       break;
   }
-  if (preferences.likesLeftovers && template.tags.contains('leftovers')) score += 3;
+  if (preferences.likesLeftovers && template.tags.contains('leftovers')) {
+    score += 3;
+  }
   return score;
 }
 
-PlannedMeal _toPlannedMeal(MealTemplate template, List<PantryItem> pantry, Preferences preferences) {
+PlannedMeal _toPlannedMeal(
+  MealTemplate template,
+  List<PantryItem> pantry,
+  Preferences preferences,
+) {
   final pantryNames = pantry.map((item) => _normalize(item.name)).toSet();
   final useSoonNames = pantry
       .where((item) => item.urgency == ItemUrgency.useSoon)
@@ -114,8 +143,11 @@ PlannedMeal _toPlannedMeal(MealTemplate template, List<PantryItem> pantry, Prefe
     final normalized = _normalize(ingredient.name);
     if (pantryNames.contains(normalized)) {
       pantryUsed.add(ingredient.name);
-      if (useSoonNames.contains(normalized)) usedSoonItems.add(ingredient.name);
-    } else if (ingredient.optionalStaple || kStapleIngredients.contains(normalized)) {
+      if (useSoonNames.contains(normalized)) {
+        usedSoonItems.add(ingredient.name);
+      }
+    } else if (ingredient.optionalStaple ||
+        kStapleIngredients.contains(normalized)) {
       checkIfYouHave.add(ingredient);
     } else {
       buyNeeded.add(ingredient);
@@ -123,8 +155,12 @@ PlannedMeal _toPlannedMeal(MealTemplate template, List<PantryItem> pantry, Prefe
   }
 
   final reasonBits = <String>[];
-  if (pantryUsed.isNotEmpty) reasonBits.add('uses your ${pantryUsed.take(2).join(' and ')}');
-  if (usedSoonItems.isNotEmpty) reasonBits.add('helps use ${usedSoonItems.join(' and ')} soon');
+  if (pantryUsed.isNotEmpty) {
+    reasonBits.add('uses your ${pantryUsed.take(2).join(' and ')}');
+  }
+  if (usedSoonItems.isNotEmpty) {
+    reasonBits.add('helps use ${usedSoonItems.join(' and ')} soon');
+  }
   switch (preferences.planMode) {
     case PlanMode.cheapest:
       reasonBits.add('keeps new purchases modest');
@@ -156,19 +192,18 @@ PlannedMeal _toPlannedMeal(MealTemplate template, List<PantryItem> pantry, Prefe
 }
 
 Map<Aisle, List<ShoppingListItem>> buildShoppingList(List<PlannedMeal> meals) {
-  final grouped = <Aisle, Map<String, ShoppingListItem>>{};
+  final grouped = <Aisle, Map<String, _ShoppingAccumulator>>{};
   void addItem(MealIngredient ingredient, {required bool check}) {
     final aisleMap = grouped.putIfAbsent(ingredient.aisle, () => {});
     final key = _normalize(ingredient.name);
-    aisleMap.putIfAbsent(
+    final accumulator = aisleMap.putIfAbsent(
       key,
-      () => ShoppingListItem(
+      () => _ShoppingAccumulator(
         name: canonicalizeIngredient(ingredient.name),
-        quantity: ingredient.quantity,
         aisle: ingredient.aisle,
-        isCheckIfHave: check,
       ),
     );
+    accumulator.add(ingredient.quantity, check: check);
   }
 
   for (final meal in meals) {
@@ -182,7 +217,7 @@ Map<Aisle, List<ShoppingListItem>> buildShoppingList(List<PlannedMeal> meals) {
 
   final result = <Aisle, List<ShoppingListItem>>{};
   for (final aisle in grouped.keys) {
-    result[aisle] = grouped[aisle]!.values.toList()
+    result[aisle] = grouped[aisle]!.values.map((item) => item.build()).toList()
       ..sort((a, b) => a.name.compareTo(b.name));
   }
   return result;
@@ -198,22 +233,45 @@ String canonicalizeIngredient(String name) {
   }
 }
 
-LeftoverSummary buildLeftoverSummary(List<PlannedMeal> meals, List<PantryItem> pantry) {
+LeftoverSummary buildLeftoverSummary(
+  List<PlannedMeal> meals,
+  List<PantryItem> pantry,
+) {
   final used = meals.expand((meal) => meal.pantryUsed).map(_normalize).toSet();
   final likelyUsedUp = pantry
-      .where((item) => item.urgency == ItemUrgency.useSoon && used.contains(_normalize(item.name)))
+      .where(
+        (item) =>
+            item.urgency == ItemUrgency.useSoon &&
+            used.contains(_normalize(item.name)),
+      )
       .map((item) => item.name)
       .toList();
   final likelyRemaining = pantry
-      .where((item) => !used.contains(_normalize(item.name)) || item.quantityState == QuantityState.full)
+      .where(
+        (item) =>
+            !used.contains(_normalize(item.name)) ||
+            item.quantityState == QuantityState.full,
+      )
       .map((item) => item.name)
       .toSet()
       .toList();
 
   final suggestions = <String>[];
-  if (likelyRemaining.contains('rice')) suggestions.add('Turn leftover rice into quick fried rice later in the week.');
-  if (likelyRemaining.contains('spinach')) suggestions.add('Blend extra spinach into eggs or pasta for one more easy meal.');
-  if (suggestions.isEmpty) suggestions.add('Use remaining vegetables in a simple soup, omelet, or grain bowl.');
+  if (likelyRemaining.contains('rice')) {
+    suggestions.add(
+      'Turn leftover rice into quick fried rice later in the week.',
+    );
+  }
+  if (likelyRemaining.contains('spinach')) {
+    suggestions.add(
+      'Blend extra spinach into eggs or pasta for one more easy meal.',
+    );
+  }
+  if (suggestions.isEmpty) {
+    suggestions.add(
+      'Use remaining vegetables in a simple soup, omelet, or grain bowl.',
+    );
+  }
 
   return LeftoverSummary(
     likelyUsedUp: likelyUsedUp,
@@ -222,22 +280,35 @@ LeftoverSummary buildLeftoverSummary(List<PlannedMeal> meals, List<PantryItem> p
   );
 }
 
-List<Clarifier> suggestClarifiers(List<PantryItem> pantry, List<PlannedMeal> meals) {
+List<Clarifier> suggestClarifiers(
+  List<PantryItem> pantry,
+  List<PlannedMeal> meals,
+) {
   final names = pantry.map((item) => _normalize(item.name)).toSet();
   final clarifiers = <Clarifier>[];
-  if (meals.any((meal) => meal.checkIfYouHave.any((item) => _normalize(item.name) == 'soy sauce'))) {
-    clarifiers.add(const Clarifier(
-      question: 'Do you still have soy sauce?',
-      impact: 'It changes whether the stir-fry and fried rice stay gap-only.',
-    ));
+  if (meals.any(
+    (meal) =>
+        meal.checkIfYouHave.any((item) => _normalize(item.name) == 'soy sauce'),
+  )) {
+    clarifiers.add(
+      const Clarifier(
+        question: 'Do you still have soy sauce?',
+        impact: 'It changes whether the stir-fry and fried rice stay gap-only.',
+      ),
+    );
   }
   if (names.contains('spinach')) {
-    final spinach = pantry.firstWhere((item) => _normalize(item.name) == 'spinach');
+    final spinach = pantry.firstWhere(
+      (item) => _normalize(item.name) == 'spinach',
+    );
     if (spinach.urgency != ItemUrgency.shelfStable) {
-      clarifiers.add(const Clarifier(
-        question: 'Is your spinach fresh and needs using soon?',
-        impact: 'If yes, keep the spinach meals pinned near the start of the week.',
-      ));
+      clarifiers.add(
+        const Clarifier(
+          question: 'Is your spinach fresh and needs using soon?',
+          impact:
+              'If yes, keep the spinach meals pinned near the start of the week.',
+        ),
+      );
     }
   }
   return clarifiers.take(2).toList();
@@ -251,10 +322,15 @@ PlannedMeal rerollMeal({
   required MealAdjustmentType adjustment,
   String? argument,
 }) {
-  final usedIds = existingMeals.map((meal) => meal.templateId).toSet()..remove(currentMeal.templateId);
+  final usedIds = existingMeals.map((meal) => meal.templateId).toSet()
+    ..remove(currentMeal.templateId);
   final templates = buildMealTemplates().where((template) {
-    if (usedIds.contains(template.id)) return false;
-    if (preferences.dietType == DietType.vegetarian && !template.vegetarian) return false;
+    if (usedIds.contains(template.id)) {
+      return false;
+    }
+    if (preferences.dietType == DietType.vegetarian && !template.vegetarian) {
+      return false;
+    }
     return true;
   }).toList();
 
@@ -266,12 +342,20 @@ PlannedMeal rerollMeal({
 
   final chosen = templates.firstWhere(
     (template) => template.id != currentMeal.templateId,
-    orElse: () => buildMealTemplates().firstWhere((template) => template.id == currentMeal.templateId),
+    orElse: () => buildMealTemplates().firstWhere(
+      (template) => template.id == currentMeal.templateId,
+    ),
   );
   return _toPlannedMeal(chosen, pantry, preferences);
 }
 
-int _rerollScore(MealTemplate template, List<PantryItem> pantry, Preferences preferences, MealAdjustmentType adjustment, String? argument) {
+int _rerollScore(
+  MealTemplate template,
+  List<PantryItem> pantry,
+  Preferences preferences,
+  MealAdjustmentType adjustment,
+  String? argument,
+) {
   var score = _scoreTemplate(template, pantry, preferences);
   switch (adjustment) {
     case MealAdjustmentType.swap:
@@ -283,12 +367,18 @@ int _rerollScore(MealTemplate template, List<PantryItem> pantry, Preferences pre
       score += (40 - template.minutes) * 2;
       break;
     case MealAdjustmentType.avoidIngredient:
-      if (argument != null && template.ingredients.any((item) => _normalize(item.name).contains(_normalize(argument)))) {
+      if (argument != null &&
+          template.ingredients.any(
+            (item) => _normalize(item.name).contains(_normalize(argument)),
+          )) {
         score -= 1000;
       }
       break;
     case MealAdjustmentType.useMoreOfItem:
-      if (argument != null && template.ingredients.any((item) => _normalize(item.name).contains(_normalize(argument)))) {
+      if (argument != null &&
+          template.ingredients.any(
+            (item) => _normalize(item.name).contains(_normalize(argument)),
+          )) {
         score += 100;
       }
       break;
@@ -303,8 +393,99 @@ String _topPantryHits(List<PlannedMeal> meals) {
       counts[item] = (counts[item] ?? 0) + 1;
     }
   }
-  final top = counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  final top = counts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
   return top.take(2).map((entry) => entry.key).join(' and ');
+}
+
+class _ShoppingAccumulator {
+  _ShoppingAccumulator({required this.name, required this.aisle});
+
+  final String name;
+  final Aisle aisle;
+  bool _isCheckIfHave = false;
+  int? _count;
+  String? _unit;
+  final List<String> _fallbackQuantities = [];
+
+  void add(String quantity, {required bool check}) {
+    _isCheckIfHave = _isCheckIfHave || check;
+    final parsed = _parseQuantity(quantity);
+    if (parsed == null) {
+      _fallbackQuantities.add(quantity);
+      return;
+    }
+    if (_count == null && _unit == null) {
+      _count = parsed.count;
+      _unit = parsed.unit;
+      return;
+    }
+    if (_unit == parsed.unit) {
+      _count = (_count ?? 0) + parsed.count;
+      return;
+    }
+    _fallbackQuantities.add(quantity);
+  }
+
+  ShoppingListItem build() {
+    final quantity = _count == null || _unit == null
+        ? _fallbackQuantities.isEmpty
+              ? 'check amount'
+              : _fallbackQuantities.toSet().join(', ')
+        : '${_count!} ${_pluralize(_unit!, _count!)}';
+    return ShoppingListItem(
+      name: name,
+      quantity: quantity,
+      aisle: aisle,
+      isCheckIfHave: _isCheckIfHave,
+    );
+  }
+}
+
+class _ParsedQuantity {
+  const _ParsedQuantity(this.count, this.unit);
+
+  final int count;
+  final String unit;
+}
+
+_ParsedQuantity? _parseQuantity(String quantity) {
+  final match = RegExp(
+    r'^(\d+)\s+(.+)$',
+  ).firstMatch(quantity.trim().toLowerCase());
+  if (match == null) {
+    return null;
+  }
+  final count = int.tryParse(match.group(1)!);
+  final rawUnit = match.group(2)!;
+  if (count == null) {
+    return null;
+  }
+  final unit = switch (rawUnit) {
+    'onion' || 'onions' => 'onion',
+    'pepper' || 'peppers' => 'pepper',
+    'head' || 'heads' => 'head',
+    'bag' || 'bags' => 'bag',
+    'box' || 'boxes' => 'box',
+    'pack' || 'packs' => 'pack',
+    'can' || 'cans' => 'can',
+    'bottle' || 'bottles' => 'bottle',
+    'bulb' || 'bulbs' => 'bulb',
+    'cucumber' || 'cucumbers' => 'cucumber',
+    'bunch' || 'bunches' => 'bunch',
+    'tub' || 'tubs' => 'tub',
+    _ => rawUnit,
+  };
+  return _ParsedQuantity(count, unit);
+}
+
+String _pluralize(String unit, int count) {
+  if (count == 1) return unit;
+  return switch (unit) {
+    'box' => 'boxes',
+    'bunch' => 'bunches',
+    _ => '${unit}s',
+  };
 }
 
 String _normalize(String value) => value.trim().toLowerCase();

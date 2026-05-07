@@ -40,6 +40,13 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
   bool _loading = true;
   PlanBundle? _bundle;
   int _tab = 0;
+  final _pantryAutocompleteController = TextEditingController();
+
+  @override
+  void dispose() {
+    _pantryAutocompleteController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -71,13 +78,20 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
     );
     setState(() {
       _bundle = bundle;
-      _state = _state.copyWith(plan: bundle.meals, lastPlanSummary: bundle.summary);
+      _state = _state.copyWith(
+        plan: bundle.meals,
+        lastPlanSummary: bundle.summary,
+      );
       _tab = 2;
     });
     await _persist();
   }
 
-  Future<void> _reroll(PlannedMeal meal, MealAdjustmentType adjustment, {String? argument}) async {
+  Future<void> _reroll(
+    PlannedMeal meal,
+    MealAdjustmentType adjustment, {
+    String? argument,
+  }) async {
     if (_bundle == null) return;
     final updated = _state.plan.map((existing) {
       if (existing.templateId != meal.templateId) return existing;
@@ -99,14 +113,40 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
     );
     setState(() {
       _bundle = summaryBundle;
-      _state = _state.copyWith(plan: updated, lastPlanSummary: summaryBundle.summary);
+      _state = _state.copyWith(
+        plan: updated,
+        lastPlanSummary: summaryBundle.summary,
+      );
     });
     await _persist();
   }
 
+  List<String> get _pantrySuggestions {
+    final options = {
+      ...kPantrySuggestions,
+      ...buildMealTemplates().expand(
+        (template) => template.ingredients.map(
+          (item) => canonicalizeIngredient(item.name),
+        ),
+      ),
+    }.toList()..sort();
+    return options;
+  }
+
   void _addPantryItem(PantryItem item) {
+    final normalized = item.name.trim().toLowerCase();
+    if (normalized.isEmpty) return;
+    final exists = _state.pantry.any(
+      (candidate) => candidate.name.trim().toLowerCase() == normalized,
+    );
+    if (exists) return;
     setState(() {
-      _state = _state.copyWith(pantry: [..._state.pantry, item]);
+      _state = _state.copyWith(
+        pantry: [
+          ..._state.pantry,
+          item.copyWith(name: canonicalizeIngredient(item.name.trim())),
+        ],
+      );
     });
     _persist();
   }
@@ -114,7 +154,9 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
   void _removePantryItem(PantryItem item) {
     setState(() {
       _state = _state.copyWith(
-        pantry: _state.pantry.where((candidate) => candidate.id != item.id).toList(),
+        pantry: _state.pantry
+            .where((candidate) => candidate.id != item.id)
+            .toList(),
       );
     });
     _persist();
@@ -137,6 +179,8 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       ),
       PantryScreen(
         pantry: _state.pantry,
+        suggestions: _pantrySuggestions,
+        autocompleteController: _pantryAutocompleteController,
         onAdd: _addPantryItem,
         onRemove: _removePantryItem,
         onGenerate: _generatePlan,
@@ -152,9 +196,7 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
     ];
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('AI Home Food Planner'),
-      ),
+      appBar: AppBar(title: const Text('AI Home Food Planner')),
       body: pages[_tab],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
@@ -162,7 +204,10 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.tune), label: 'Setup'),
           NavigationDestination(icon: Icon(Icons.kitchen), label: 'Pantry'),
-          NavigationDestination(icon: Icon(Icons.calendar_view_week), label: 'Plan'),
+          NavigationDestination(
+            icon: Icon(Icons.calendar_view_week),
+            label: 'Plan',
+          ),
           NavigationDestination(icon: Icon(Icons.shopping_cart), label: 'Shop'),
           NavigationDestination(icon: Icon(Icons.eco), label: 'Leftovers'),
         ],
@@ -204,8 +249,12 @@ class _SetupScreenState extends State<SetupScreen> {
   @override
   void initState() {
     super.initState();
-    _exclusionsController = TextEditingController(text: widget.preferences.exclusions.join(', '));
-    _dislikesController = TextEditingController(text: widget.preferences.dislikes.join(', '));
+    _exclusionsController = TextEditingController(
+      text: widget.preferences.exclusions.join(', '),
+    );
+    _dislikesController = TextEditingController(
+      text: widget.preferences.dislikes.join(', '),
+    );
   }
 
   @override
@@ -227,9 +276,14 @@ class _SetupScreenState extends State<SetupScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Plan 3 to 5 realistic dinners in under 5 minutes.', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'Plan 3 to 5 realistic dinners in under 5 minutes.',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 8),
-                const Text('Pantry-first planning, conservative shopping lists, and simple leftovers guidance.'),
+                const Text(
+                  'Pantry-first planning, conservative shopping lists, and simple leftovers guidance.',
+                ),
               ],
             ),
           ),
@@ -242,7 +296,8 @@ class _SetupScreenState extends State<SetupScreen> {
             max: 6,
             divisions: 5,
             value: p.householdSize.toDouble(),
-            onChanged: (value) => widget.onChanged(p.copyWith(householdSize: value.round())),
+            onChanged: (value) =>
+                widget.onChanged(p.copyWith(householdSize: value.round())),
           ),
         ),
         ListTile(
@@ -252,59 +307,92 @@ class _SetupScreenState extends State<SetupScreen> {
             max: 5,
             divisions: 2,
             value: p.dinnerCount.toDouble(),
-            onChanged: (value) => widget.onChanged(p.copyWith(dinnerCount: value.round())),
+            onChanged: (value) =>
+                widget.onChanged(p.copyWith(dinnerCount: value.round())),
           ),
         ),
         DropdownButtonFormField<PlanMode>(
           initialValue: p.planMode,
           decoration: const InputDecoration(labelText: 'Planning mode'),
-          items: PlanMode.values.map((mode) => DropdownMenuItem(value: mode, child: Text(mode.name))).toList(),
+          items: PlanMode.values
+              .map(
+                (mode) => DropdownMenuItem(value: mode, child: Text(mode.name)),
+              )
+              .toList(),
           onChanged: (value) => widget.onChanged(p.copyWith(planMode: value)),
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<DietType>(
           initialValue: p.dietType,
           decoration: const InputDecoration(labelText: 'Diet'),
-          items: DietType.values.map((diet) => DropdownMenuItem(value: diet, child: Text(diet.name))).toList(),
+          items: DietType.values
+              .map(
+                (diet) => DropdownMenuItem(value: diet, child: Text(diet.name)),
+              )
+              .toList(),
           onChanged: (value) => widget.onChanged(p.copyWith(dietType: value)),
         ),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           value: p.likesLeftovers,
           title: const Text('Prefer leftovers'),
-          onChanged: (value) => widget.onChanged(p.copyWith(likesLeftovers: value)),
+          onChanged: (value) =>
+              widget.onChanged(p.copyWith(likesLeftovers: value)),
         ),
         TextField(
           controller: _exclusionsController,
-          decoration: const InputDecoration(labelText: 'Allergies/exclusions', hintText: 'peanuts, shellfish'),
-          onChanged: (value) => widget.onChanged(p.copyWith(exclusions: _splitCsv(value))),
+          decoration: const InputDecoration(
+            labelText: 'Allergies/exclusions',
+            hintText: 'peanuts, shellfish',
+          ),
+          onChanged: (value) =>
+              widget.onChanged(p.copyWith(exclusions: _splitCsv(value))),
         ),
         const SizedBox(height: 12),
         TextField(
           controller: _dislikesController,
-          decoration: const InputDecoration(labelText: 'Dislikes', hintText: 'mushrooms, olives'),
-          onChanged: (value) => widget.onChanged(p.copyWith(dislikes: _splitCsv(value))),
+          decoration: const InputDecoration(
+            labelText: 'Dislikes',
+            hintText: 'mushrooms, olives',
+          ),
+          onChanged: (value) =>
+              widget.onChanged(p.copyWith(dislikes: _splitCsv(value))),
         ),
         const SizedBox(height: 16),
-        FilledButton(onPressed: widget.onContinue, child: const Text('Continue to pantry')),
+        FilledButton(
+          onPressed: widget.onContinue,
+          child: const Text('Continue to pantry'),
+        ),
       ],
     );
   }
 }
 
-class PantryScreen extends StatelessWidget {
+class PantryScreen extends StatefulWidget {
   const PantryScreen({
     super.key,
     required this.pantry,
+    required this.suggestions,
+    required this.autocompleteController,
     required this.onAdd,
     required this.onRemove,
     required this.onGenerate,
   });
 
   final List<PantryItem> pantry;
+  final List<String> suggestions;
+  final TextEditingController autocompleteController;
   final ValueChanged<PantryItem> onAdd;
   final ValueChanged<PantryItem> onRemove;
   final VoidCallback onGenerate;
+
+  @override
+  State<PantryScreen> createState() => _PantryScreenState();
+}
+
+class _PantryScreenState extends State<PantryScreen> {
+  QuantityState _quantityState = QuantityState.some;
+  ItemUrgency _urgency = ItemUrgency.unknown;
 
   @override
   Widget build(BuildContext context) {
@@ -317,9 +405,79 @@ class PantryScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Pantry snapshot', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'Pantry snapshot',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 8),
-                const Text('Add 3 to 10 items for the strongest pantry-first plan. Quantities stay loose on purpose.'),
+                const Text(
+                  'Add 3 to 10 items for the strongest pantry-first plan. Use free text or autocomplete, then keep quantity and urgency loose.',
+                ),
+                const SizedBox(height: 12),
+                Autocomplete<String>(
+                  optionsBuilder: (textEditingValue) {
+                    final query = textEditingValue.text.trim().toLowerCase();
+                    if (query.isEmpty) return widget.suggestions.take(8);
+                    return widget.suggestions
+                        .where((item) => item.toLowerCase().contains(query))
+                        .take(8);
+                  },
+                  onSelected: (value) =>
+                      widget.autocompleteController.text = value,
+                  fieldViewBuilder:
+                      (context, controller, focusNode, onFieldSubmitted) {
+                        controller.value = widget.autocompleteController.value;
+                        return TextField(
+                          controller: controller,
+                          focusNode: focusNode,
+                          decoration: const InputDecoration(
+                            labelText: 'Add pantry item',
+                            hintText: 'onion, greek yogurt, salmon',
+                          ),
+                        );
+                      },
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    DropdownButton<QuantityState>(
+                      value: _quantityState,
+                      onChanged: (value) => setState(
+                        () => _quantityState = value ?? QuantityState.some,
+                      ),
+                      items: QuantityState.values
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text('Amount: ${value.name}'),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    DropdownButton<ItemUrgency>(
+                      value: _urgency,
+                      onChanged: (value) => setState(
+                        () => _urgency = value ?? ItemUrgency.unknown,
+                      ),
+                      items: ItemUrgency.values
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text('Timing: ${value.name}'),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: _addCustomItem,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add pantry item'),
+                ),
                 const SizedBox(height: 12),
                 Wrap(
                   spacing: 8,
@@ -327,22 +485,34 @@ class PantryScreen extends StatelessWidget {
                   children: kPantrySuggestions.map((item) {
                     return ActionChip(
                       label: Text(item),
-                      onPressed: pantry.any((existing) => existing.name == item)
+                      onPressed:
+                          widget.pantry.any(
+                            (existing) => existing.name.toLowerCase() == item,
+                          )
                           ? null
-                          : () => onAdd(PantryItem(
-                              id: DateTime.now().microsecondsSinceEpoch.toString(),
-                              name: item,
-                              quantityState: QuantityState.some,
-                              urgency: const {'spinach', 'broccoli', 'chicken'}.contains(item)
-                                  ? ItemUrgency.useSoon
-                                  : ItemUrgency.unknown,
-                            )),
+                          : () => widget.onAdd(
+                              PantryItem(
+                                id: DateTime.now().microsecondsSinceEpoch
+                                    .toString(),
+                                name: item,
+                                quantityState: QuantityState.some,
+                                urgency:
+                                    const {
+                                      'spinach',
+                                      'broccoli',
+                                      'chicken',
+                                    }.contains(item)
+                                    ? ItemUrgency.useSoon
+                                    : ItemUrgency.unknown,
+                              ),
+                            ),
                     );
                   }).toList(),
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: () => _showPhotoSuggestionSheet(context, onAdd),
+                  onPressed: () =>
+                      _showPhotoSuggestionSheet(context, widget.onAdd),
                   icon: const Icon(Icons.photo_camera_back_outlined),
                   label: const Text('Photo suggestions only'),
                 ),
@@ -351,25 +521,47 @@ class PantryScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        ...pantry.map(
+        ...widget.pantry.map(
           (item) => Card(
             child: ListTile(
               title: Text(item.name),
-              subtitle: Text('${item.quantityState.name} • ${item.urgency.name}'),
+              subtitle: Text(
+                '${item.quantityState.name} • ${item.urgency.name}',
+              ),
               trailing: IconButton(
                 icon: const Icon(Icons.delete_outline),
-                onPressed: () => onRemove(item),
+                onPressed: () => widget.onRemove(item),
               ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        FilledButton(onPressed: onGenerate, child: const Text('Generate plan')),
+        FilledButton(
+          onPressed: widget.onGenerate,
+          child: const Text('Generate plan'),
+        ),
       ],
     );
   }
 
-  Future<void> _showPhotoSuggestionSheet(BuildContext context, ValueChanged<PantryItem> onAdd) async {
+  void _addCustomItem() {
+    final raw = widget.autocompleteController.text.trim();
+    if (raw.isEmpty) return;
+    widget.onAdd(
+      PantryItem(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        name: raw,
+        quantityState: _quantityState,
+        urgency: _urgency,
+      ),
+    );
+    widget.autocompleteController.clear();
+  }
+
+  Future<void> _showPhotoSuggestionSheet(
+    BuildContext context,
+    ValueChanged<PantryItem> onAdd,
+  ) async {
     await showModalBottomSheet<void>(
       context: context,
       builder: (context) => SafeArea(
@@ -379,9 +571,14 @@ class PantryScreen extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Suggested from photo', style: Theme.of(context).textTheme.titleLarge),
+              Text(
+                'Suggested from photo',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
               const SizedBox(height: 8),
-              const Text('Prototype behavior: these are suggestions only, nothing is added until you confirm it.'),
+              const Text(
+                'Prototype behavior: these are suggestions only, nothing is added until you confirm it.',
+              ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
@@ -389,12 +586,16 @@ class PantryScreen extends StatelessWidget {
                 children: ['spinach', 'yogurt', 'carrots'].map((name) {
                   return FilledButton.tonal(
                     onPressed: () {
-                      onAdd(PantryItem(
-                        id: DateTime.now().microsecondsSinceEpoch.toString(),
-                        name: name,
-                        quantityState: QuantityState.some,
-                        urgency: name == 'spinach' ? ItemUrgency.useSoon : ItemUrgency.unknown,
-                      ));
+                      onAdd(
+                        PantryItem(
+                          id: DateTime.now().microsecondsSinceEpoch.toString(),
+                          name: name,
+                          quantityState: QuantityState.some,
+                          urgency: name == 'spinach'
+                              ? ItemUrgency.useSoon
+                              : ItemUrgency.unknown,
+                        ),
+                      );
                       Navigator.pop(context);
                     },
                     child: Text('Add $name'),
@@ -429,14 +630,26 @@ class PlanScreen extends StatelessWidget {
       return ListView(
         padding: const EdgeInsets.all(16),
         children: const [
-          Card(child: ListTile(title: Text('No plan yet'), subtitle: Text('Generate your weekly dinners from the pantry tab.'))),
+          Card(
+            child: ListTile(
+              title: Text('No plan yet'),
+              subtitle: Text(
+                'Generate your weekly dinners from the pantry tab.',
+              ),
+            ),
+          ),
         ],
       );
     }
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Card(child: ListTile(title: const Text('Weekly plan'), subtitle: Text(summary))),
+        Card(
+          child: ListTile(
+            title: const Text('Weekly plan'),
+            subtitle: Text(summary),
+          ),
+        ),
         if (clarifiers.isNotEmpty)
           Card(
             child: Padding(
@@ -444,27 +657,39 @@ class PlanScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Planned with current pantry info', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'Planned with current pantry info',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 8),
-                  ...clarifiers.map((clarifier) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.help_outline),
-                        title: Text(clarifier.question),
-                        subtitle: Text(clarifier.impact),
-                      )),
+                  ...clarifiers.map(
+                    (clarifier) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.help_outline),
+                      title: Text(clarifier.question),
+                      subtitle: Text(clarifier.impact),
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
-        ...plan.map((meal) => Card(
-              child: ListTile(
-                title: Text(meal.title),
-                subtitle: Text('${meal.rationale}\n${meal.minutes} min • ${meal.pattern}'),
-                isThreeLine: true,
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => onViewMeal(meal),
+        ...plan.map(
+          (meal) => Card(
+            child: ListTile(
+              title: Text(meal.title),
+              subtitle: Text(
+                '${meal.rationale}\n${meal.minutes} min • ${meal.pattern}\n'
+                'Main: ${meal.ingredients.take(3).map((item) => canonicalizeIngredient(item.name)).join(', ')}\n'
+                'Pantry: ${meal.pantryUsed.isEmpty ? 'none' : meal.pantryUsed.join(', ')} • '
+                'Buy: ${meal.buyNeeded.isEmpty ? 'none' : meal.buyNeeded.map((item) => canonicalizeIngredient(item.name)).join(', ')}',
               ),
-            )),
+              isThreeLine: true,
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => onViewMeal(meal),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -478,7 +703,9 @@ class ShoppingScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (bundle == null) {
-      return const Center(child: Text('Generate a plan to see the gap-only shopping list.'));
+      return const Center(
+        child: Text('Generate a plan to see the gap-only shopping list.'),
+      );
     }
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -489,14 +716,21 @@ class ShoppingScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(entry.key.name.toUpperCase(), style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  entry.key.name.toUpperCase(),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 8),
-                ...entry.value.map((item) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(item.name),
-                      subtitle: Text(item.quantity),
-                      trailing: item.isCheckIfHave ? const Chip(label: Text('check if you have')) : null,
-                    )),
+                ...entry.value.map(
+                  (item) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(item.name),
+                    subtitle: Text(item.quantity),
+                    trailing: item.isCheckIfHave
+                        ? const Chip(label: Text('check if you have'))
+                        : null,
+                  ),
+                ),
               ],
             ),
           ),
@@ -514,7 +748,9 @@ class LeftoversScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (bundle == null) {
-      return const Center(child: Text('Generate a plan to see leftovers guidance.'));
+      return const Center(
+        child: Text('Generate a plan to see leftovers guidance.'),
+      );
     }
     final leftovers = bundle!.leftovers;
     return ListView(
@@ -526,9 +762,16 @@ class LeftoversScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Likely used up', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Likely used up',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 8),
-                Text(leftovers.likelyUsedUp.isEmpty ? 'Nothing clearly used up yet.' : leftovers.likelyUsedUp.join(', ')),
+                Text(
+                  leftovers.likelyUsedUp.isEmpty
+                      ? 'Nothing clearly used up yet.'
+                      : leftovers.likelyUsedUp.join(', '),
+                ),
               ],
             ),
           ),
@@ -539,7 +782,10 @@ class LeftoversScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Likely remaining', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Likely remaining',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 8),
                 Text(leftovers.likelyRemaining.join(', ')),
               ],
@@ -552,9 +798,17 @@ class LeftoversScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Follow-on ideas', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Follow-on ideas',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 8),
-                ...leftovers.suggestions.map((tip) => ListTile(contentPadding: EdgeInsets.zero, title: Text(tip))),
+                ...leftovers.suggestions.map(
+                  (tip) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(tip),
+                  ),
+                ),
               ],
             ),
           ),
@@ -564,13 +818,44 @@ class LeftoversScreen extends StatelessWidget {
   }
 }
 
-class MealDetailSheet extends StatelessWidget {
+class MealDetailSheet extends StatefulWidget {
   const MealDetailSheet({super.key, required this.meal});
 
   final PlannedMeal meal;
 
   @override
+  State<MealDetailSheet> createState() => _MealDetailSheetState();
+}
+
+class _MealDetailSheetState extends State<MealDetailSheet> {
+  String? _avoidIngredient;
+  String? _useMoreIngredient;
+
+  @override
+  void initState() {
+    super.initState();
+    _avoidIngredient = widget.meal.ingredients.isEmpty
+        ? null
+        : canonicalizeIngredient(widget.meal.ingredients.first.name);
+    _useMoreIngredient = widget.meal.pantryUsed.isNotEmpty
+        ? widget.meal.pantryUsed.first
+        : (widget.meal.ingredients.isEmpty
+              ? null
+              : canonicalizeIngredient(widget.meal.ingredients.first.name));
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final meal = widget.meal;
+    final ingredientOptions =
+        meal.ingredients
+            .map((item) => canonicalizeIngredient(item.name))
+            .toSet()
+            .toList()
+          ..sort();
+    final useMoreOptions = {...ingredientOptions, ...meal.pantryUsed}.toList()
+      ..sort();
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -578,35 +863,136 @@ class MealDetailSheet extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(meal.title, style: Theme.of(context).textTheme.headlineSmall),
+              Text(
+                meal.title,
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
               const SizedBox(height: 8),
               Text(meal.rationale),
-              const SizedBox(height: 12),
-              Text('Pantry used: ${meal.pantryUsed.join(', ')}'),
               const SizedBox(height: 8),
-              Text('Buy needed: ${meal.buyNeeded.map((item) => item.name).join(', ')}'),
+              Text('${meal.minutes} min • ${meal.pattern}'),
+              const SizedBox(height: 12),
+              Text(
+                'Full ingredient list',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              ...meal.ingredients.map(
+                (item) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(canonicalizeIngredient(item.name)),
+                  subtitle: Text(item.quantity),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Pantry used: ${meal.pantryUsed.isEmpty ? 'none' : meal.pantryUsed.join(', ')}',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Buy needed: ${meal.buyNeeded.isEmpty ? 'none' : meal.buyNeeded.map((item) => canonicalizeIngredient(item.name)).join(', ')}',
+              ),
               if (meal.checkIfYouHave.isNotEmpty) ...[
                 const SizedBox(height: 8),
-                Text('Check if you have: ${meal.checkIfYouHave.map((item) => item.name).join(', ')}'),
+                Text(
+                  'Check if you have: ${meal.checkIfYouHave.map((item) => canonicalizeIngredient(item.name)).join(', ')}',
+                ),
               ],
               const SizedBox(height: 12),
-              Text('Simple steps', style: Theme.of(context).textTheme.titleMedium),
-              ...meal.steps.asMap().entries.map((entry) => ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: CircleAvatar(radius: 12, child: Text('${entry.key + 1}')),
-                    title: Text(entry.value),
-                  )),
+              Text(
+                'Simple steps',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              ...meal.steps.asMap().entries.map(
+                (entry) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    radius: 12,
+                    child: Text('${entry.key + 1}'),
+                  ),
+                  title: Text(entry.value),
+                ),
+              ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _actionButton(context, 'Swap this meal', MealAdjustmentType.swap),
-                  _actionButton(context, 'Make cheaper', MealAdjustmentType.cheaper),
-                  _actionButton(context, 'Make faster', MealAdjustmentType.faster),
-                  _actionButton(context, 'Avoid spinach', MealAdjustmentType.avoidIngredient, argument: 'spinach'),
-                  _actionButton(context, 'Use more rice', MealAdjustmentType.useMoreOfItem, argument: 'rice'),
+                  _actionButton(
+                    context,
+                    'Swap this meal',
+                    MealAdjustmentType.swap,
+                  ),
+                  _actionButton(
+                    context,
+                    'Make cheaper',
+                    MealAdjustmentType.cheaper,
+                  ),
+                  _actionButton(
+                    context,
+                    'Make faster',
+                    MealAdjustmentType.faster,
+                  ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Ingredient rerolls',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: _avoidIngredient,
+                decoration: const InputDecoration(
+                  labelText: 'Avoid this ingredient',
+                ),
+                items: ingredientOptions
+                    .map(
+                      (item) =>
+                          DropdownMenuItem(value: item, child: Text(item)),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() => _avoidIngredient = value),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.tonal(
+                onPressed: _avoidIngredient == null
+                    ? null
+                    : () => Navigator.pop(
+                        context,
+                        _MealAction(
+                          MealAdjustmentType.avoidIngredient,
+                          _avoidIngredient,
+                        ),
+                      ),
+                child: const Text('Reroll without selected ingredient'),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _useMoreIngredient,
+                decoration: const InputDecoration(
+                  labelText: 'Use more of item X',
+                ),
+                items: useMoreOptions
+                    .map(
+                      (item) =>
+                          DropdownMenuItem(value: item, child: Text(item)),
+                    )
+                    .toList(),
+                onChanged: (value) =>
+                    setState(() => _useMoreIngredient = value),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.tonal(
+                onPressed: _useMoreIngredient == null
+                    ? null
+                    : () => Navigator.pop(
+                        context,
+                        _MealAction(
+                          MealAdjustmentType.useMoreOfItem,
+                          _useMoreIngredient,
+                        ),
+                      ),
+                child: const Text('Reroll to use more of selected item'),
               ),
             ],
           ),
@@ -615,7 +1001,12 @@ class MealDetailSheet extends StatelessWidget {
     );
   }
 
-  Widget _actionButton(BuildContext context, String label, MealAdjustmentType type, {String? argument}) {
+  Widget _actionButton(
+    BuildContext context,
+    String label,
+    MealAdjustmentType type, {
+    String? argument,
+  }) {
     return FilledButton.tonal(
       onPressed: () => Navigator.pop(context, _MealAction(type, argument)),
       child: Text(label),
