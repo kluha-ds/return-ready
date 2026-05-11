@@ -1,55 +1,442 @@
-import 'package:file_picker/file_picker.dart';
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'demo_data.dart';
-import 'models.dart';
-import 'planner.dart';
-
 void main() {
-  runApp(const FoodPlannerApp());
+  runApp(const ReturnReadyApp());
 }
 
-class FoodPlannerApp extends StatelessWidget {
-  const FoodPlannerApp({super.key});
+class ReturnReadyApp extends StatelessWidget {
+  const ReturnReadyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'AI Home Food Planner',
+      title: 'ReturnReady',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4F7A33)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6A5AE0)),
         useMaterial3: true,
       ),
-      home: const PlannerHomePage(),
+      home: const ReturnReadyHomePage(),
     );
   }
 }
 
-class PlannerHomePage extends StatefulWidget {
-  const PlannerHomePage({super.key});
-
-  @override
-  State<PlannerHomePage> createState() => _PlannerHomePageState();
+enum OrderStatus {
+  tracked,
+  mightReturn,
+  returnStarted,
+  waitingForRefund,
+  refunded,
+  deadlineMissed,
 }
 
-class _PlannerHomePageState extends State<PlannerHomePage> {
-  static const _prefsKey = 'food_planner_state_v1';
+enum DeadlineConfidence { confirmed, estimated, unknown }
 
-  PlannerState _state = seedPlannerState();
-  bool _loading = true;
-  PlanBundle? _bundle;
-  int _tab = 0;
-  final _pantryAutocompleteController = TextEditingController();
-  String? _shoppingFeedback;
+enum OrderSource { manual, gmail }
+
+enum InboxFilter { all, actionNeeded, waitingForRefund, refunded }
+
+extension OrderStatusX on OrderStatus {
+  String get label => switch (this) {
+    OrderStatus.tracked => 'Tracked',
+    OrderStatus.mightReturn => 'Might Return',
+    OrderStatus.returnStarted => 'Return Started',
+    OrderStatus.waitingForRefund => 'Waiting for Refund',
+    OrderStatus.refunded => 'Refunded',
+    OrderStatus.deadlineMissed => 'Deadline Missed',
+  };
+}
+
+extension DeadlineConfidenceX on DeadlineConfidence {
+  String get label => switch (this) {
+    DeadlineConfidence.confirmed => 'Confirmed deadline',
+    DeadlineConfidence.estimated => 'Estimated deadline',
+    DeadlineConfidence.unknown => 'Unknown deadline',
+  };
+}
+
+extension InboxFilterX on InboxFilter {
+  String get label => switch (this) {
+    InboxFilter.all => 'All',
+    InboxFilter.actionNeeded => 'Action Needed',
+    InboxFilter.waitingForRefund => 'Waiting for Refund',
+    InboxFilter.refunded => 'Refunded',
+  };
+}
+
+class OrderRecord {
+  const OrderRecord({
+    required this.id,
+    required this.userId,
+    required this.merchantName,
+    required this.orderDate,
+    required this.totalAmount,
+    required this.currency,
+    required this.source,
+    required this.status,
+    required this.returnDeadlineConfidence,
+    required this.createdAt,
+    required this.updatedAt,
+    this.orderNumber,
+    this.sourceMessageId,
+    this.returnDeadlineDate,
+    this.deadlineBasisNote,
+    this.merchantReturnUrl,
+    this.notes,
+    this.expectedRefundAmount,
+    this.actualRefundAmount,
+    this.refundReceivedDate,
+    this.startedAt,
+    this.droppedOffAt,
+    this.methodNote,
+    this.proofAttachmentUrl,
+    this.lastRefundReminderAt,
+  });
+
+  final String id;
+  final String userId;
+  final String merchantName;
+  final String? orderNumber;
+  final DateTime orderDate;
+  final double totalAmount;
+  final String currency;
+  final OrderSource source;
+  final String? sourceMessageId;
+  final OrderStatus status;
+  final DateTime? returnDeadlineDate;
+  final DeadlineConfidence returnDeadlineConfidence;
+  final String? deadlineBasisNote;
+  final String? merchantReturnUrl;
+  final String? notes;
+  final double? expectedRefundAmount;
+  final double? actualRefundAmount;
+  final DateTime? refundReceivedDate;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final DateTime? startedAt;
+  final DateTime? droppedOffAt;
+  final String? methodNote;
+  final String? proofAttachmentUrl;
+  final DateTime? lastRefundReminderAt;
+
+  OrderRecord copyWith({
+    String? id,
+    String? userId,
+    String? merchantName,
+    String? orderNumber,
+    DateTime? orderDate,
+    double? totalAmount,
+    String? currency,
+    OrderSource? source,
+    String? sourceMessageId,
+    OrderStatus? status,
+    DateTime? returnDeadlineDate,
+    bool clearDeadlineDate = false,
+    DeadlineConfidence? returnDeadlineConfidence,
+    String? deadlineBasisNote,
+    bool clearDeadlineBasisNote = false,
+    String? merchantReturnUrl,
+    bool clearMerchantReturnUrl = false,
+    String? notes,
+    bool clearNotes = false,
+    double? expectedRefundAmount,
+    bool clearExpectedRefundAmount = false,
+    double? actualRefundAmount,
+    bool clearActualRefundAmount = false,
+    DateTime? refundReceivedDate,
+    bool clearRefundReceivedDate = false,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    DateTime? startedAt,
+    bool clearStartedAt = false,
+    DateTime? droppedOffAt,
+    bool clearDroppedOffAt = false,
+    String? methodNote,
+    bool clearMethodNote = false,
+    String? proofAttachmentUrl,
+    bool clearProofAttachmentUrl = false,
+    DateTime? lastRefundReminderAt,
+    bool clearLastRefundReminderAt = false,
+  }) {
+    return OrderRecord(
+      id: id ?? this.id,
+      userId: userId ?? this.userId,
+      merchantName: merchantName ?? this.merchantName,
+      orderNumber: orderNumber ?? this.orderNumber,
+      orderDate: orderDate ?? this.orderDate,
+      totalAmount: totalAmount ?? this.totalAmount,
+      currency: currency ?? this.currency,
+      source: source ?? this.source,
+      sourceMessageId: sourceMessageId ?? this.sourceMessageId,
+      status: status ?? this.status,
+      returnDeadlineDate: clearDeadlineDate
+          ? null
+          : returnDeadlineDate ?? this.returnDeadlineDate,
+      returnDeadlineConfidence:
+          returnDeadlineConfidence ?? this.returnDeadlineConfidence,
+      deadlineBasisNote: clearDeadlineBasisNote
+          ? null
+          : deadlineBasisNote ?? this.deadlineBasisNote,
+      merchantReturnUrl: clearMerchantReturnUrl
+          ? null
+          : merchantReturnUrl ?? this.merchantReturnUrl,
+      notes: clearNotes ? null : notes ?? this.notes,
+      expectedRefundAmount: clearExpectedRefundAmount
+          ? null
+          : expectedRefundAmount ?? this.expectedRefundAmount,
+      actualRefundAmount: clearActualRefundAmount
+          ? null
+          : actualRefundAmount ?? this.actualRefundAmount,
+      refundReceivedDate: clearRefundReceivedDate
+          ? null
+          : refundReceivedDate ?? this.refundReceivedDate,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      startedAt: clearStartedAt ? null : startedAt ?? this.startedAt,
+      droppedOffAt: clearDroppedOffAt
+          ? null
+          : droppedOffAt ?? this.droppedOffAt,
+      methodNote: clearMethodNote ? null : methodNote ?? this.methodNote,
+      proofAttachmentUrl: clearProofAttachmentUrl
+          ? null
+          : proofAttachmentUrl ?? this.proofAttachmentUrl,
+      lastRefundReminderAt: clearLastRefundReminderAt
+          ? null
+          : lastRefundReminderAt ?? this.lastRefundReminderAt,
+    );
+  }
+
+  bool get deadlineKnown =>
+      returnDeadlineConfidence != DeadlineConfidence.unknown &&
+      returnDeadlineDate != null;
+
+  int? daysUntilDeadline(DateTime now) {
+    if (!deadlineKnown) return null;
+    final start = DateTime(now.year, now.month, now.day);
+    final deadline = DateTime(
+      returnDeadlineDate!.year,
+      returnDeadlineDate!.month,
+      returnDeadlineDate!.day,
+    );
+    return deadline.difference(start).inDays;
+  }
+
+  String amountLabel([double? override]) {
+    final value = override ?? totalAmount;
+    return '$currency${value.toStringAsFixed(2)}';
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'userId': userId,
+    'merchantName': merchantName,
+    'orderNumber': orderNumber,
+    'orderDate': orderDate.toIso8601String(),
+    'totalAmount': totalAmount,
+    'currency': currency,
+    'source': source.name,
+    'sourceMessageId': sourceMessageId,
+    'status': status.name,
+    'returnDeadlineDate': returnDeadlineDate?.toIso8601String(),
+    'returnDeadlineConfidence': returnDeadlineConfidence.name,
+    'deadlineBasisNote': deadlineBasisNote,
+    'merchantReturnUrl': merchantReturnUrl,
+    'notes': notes,
+    'expectedRefundAmount': expectedRefundAmount,
+    'actualRefundAmount': actualRefundAmount,
+    'refundReceivedDate': refundReceivedDate?.toIso8601String(),
+    'createdAt': createdAt.toIso8601String(),
+    'updatedAt': updatedAt.toIso8601String(),
+    'startedAt': startedAt?.toIso8601String(),
+    'droppedOffAt': droppedOffAt?.toIso8601String(),
+    'methodNote': methodNote,
+    'proofAttachmentUrl': proofAttachmentUrl,
+    'lastRefundReminderAt': lastRefundReminderAt?.toIso8601String(),
+  };
+
+  factory OrderRecord.fromJson(Map<String, dynamic> json) {
+    DateTime? parseDate(String key) =>
+        json[key] == null ? null : DateTime.parse(json[key] as String);
+
+    return OrderRecord(
+      id: json['id'] as String,
+      userId: json['userId'] as String? ?? 'local-user',
+      merchantName: json['merchantName'] as String,
+      orderNumber: json['orderNumber'] as String?,
+      orderDate: DateTime.parse(json['orderDate'] as String),
+      totalAmount: (json['totalAmount'] as num).toDouble(),
+      currency: json['currency'] as String? ?? '\$',
+      source: OrderSource.values.byName(
+        json['source'] as String? ?? OrderSource.manual.name,
+      ),
+      sourceMessageId: json['sourceMessageId'] as String?,
+      status: OrderStatus.values.byName(
+        json['status'] as String? ?? OrderStatus.tracked.name,
+      ),
+      returnDeadlineDate: parseDate('returnDeadlineDate'),
+      returnDeadlineConfidence: DeadlineConfidence.values.byName(
+        json['returnDeadlineConfidence'] as String? ??
+            DeadlineConfidence.unknown.name,
+      ),
+      deadlineBasisNote: json['deadlineBasisNote'] as String?,
+      merchantReturnUrl: json['merchantReturnUrl'] as String?,
+      notes: json['notes'] as String?,
+      expectedRefundAmount: (json['expectedRefundAmount'] as num?)?.toDouble(),
+      actualRefundAmount: (json['actualRefundAmount'] as num?)?.toDouble(),
+      refundReceivedDate: parseDate('refundReceivedDate'),
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      updatedAt: DateTime.parse(json['updatedAt'] as String),
+      startedAt: parseDate('startedAt'),
+      droppedOffAt: parseDate('droppedOffAt'),
+      methodNote: json['methodNote'] as String?,
+      proofAttachmentUrl: json['proofAttachmentUrl'] as String?,
+      lastRefundReminderAt: parseDate('lastRefundReminderAt'),
+    );
+  }
+}
+
+class AppState {
+  const AppState({
+    required this.orders,
+    required this.gmailConnected,
+    required this.gmailImportSeeded,
+    required this.userTimeZoneLabel,
+    required this.quietHoursEnabled,
+  });
+
+  final List<OrderRecord> orders;
+  final bool gmailConnected;
+  final bool gmailImportSeeded;
+  final String userTimeZoneLabel;
+  final bool quietHoursEnabled;
+
+  AppState copyWith({
+    List<OrderRecord>? orders,
+    bool? gmailConnected,
+    bool? gmailImportSeeded,
+    String? userTimeZoneLabel,
+    bool? quietHoursEnabled,
+  }) {
+    return AppState(
+      orders: orders ?? this.orders,
+      gmailConnected: gmailConnected ?? this.gmailConnected,
+      gmailImportSeeded: gmailImportSeeded ?? this.gmailImportSeeded,
+      userTimeZoneLabel: userTimeZoneLabel ?? this.userTimeZoneLabel,
+      quietHoursEnabled: quietHoursEnabled ?? this.quietHoursEnabled,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'orders': orders.map((e) => e.toJson()).toList(),
+    'gmailConnected': gmailConnected,
+    'gmailImportSeeded': gmailImportSeeded,
+    'userTimeZoneLabel': userTimeZoneLabel,
+    'quietHoursEnabled': quietHoursEnabled,
+  };
+
+  factory AppState.fromJson(Map<String, dynamic> json) {
+    return AppState(
+      orders: ((json['orders'] as List?) ?? const [])
+          .map((e) => OrderRecord.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      gmailConnected: json['gmailConnected'] as bool? ?? false,
+      gmailImportSeeded: json['gmailImportSeeded'] as bool? ?? false,
+      userTimeZoneLabel:
+          json['userTimeZoneLabel'] as String? ?? 'Local timezone',
+      quietHoursEnabled: json['quietHoursEnabled'] as bool? ?? true,
+    );
+  }
+
+  static AppState seed() {
+    final now = DateTime.now();
+    return AppState(
+      orders: [
+        OrderRecord(
+          id: 'seed-1',
+          userId: 'local-user',
+          merchantName: 'Everlane',
+          orderNumber: 'EVR-19321',
+          orderDate: now.subtract(const Duration(days: 12)),
+          totalAmount: 128.00,
+          currency: '\$',
+          source: OrderSource.gmail,
+          sourceMessageId: 'gmail-1',
+          status: OrderStatus.mightReturn,
+          returnDeadlineDate: now.add(const Duration(days: 3)),
+          returnDeadlineConfidence: DeadlineConfidence.confirmed,
+          deadlineBasisNote: 'Explicit date parsed from merchant email.',
+          merchantReturnUrl: 'https://www.everlane.com/account/orders',
+          notes: 'Sizing feels off.',
+          expectedRefundAmount: 128.00,
+          createdAt: now,
+          updatedAt: now,
+        ),
+        OrderRecord(
+          id: 'seed-2',
+          userId: 'local-user',
+          merchantName: 'Target',
+          orderNumber: 'TG-28844',
+          orderDate: now.subtract(const Duration(days: 21)),
+          totalAmount: 62.49,
+          currency: '\$',
+          source: OrderSource.manual,
+          status: OrderStatus.waitingForRefund,
+          returnDeadlineDate: now.subtract(const Duration(days: 2)),
+          returnDeadlineConfidence: DeadlineConfidence.estimated,
+          deadlineBasisNote: 'Estimated from merchant policy and order date.',
+          merchantReturnUrl: 'https://www.target.com/returns',
+          expectedRefundAmount: 62.49,
+          startedAt: now.subtract(const Duration(days: 9)),
+          droppedOffAt: now.subtract(const Duration(days: 8)),
+          methodNote: 'UPS Store drop-off',
+          lastRefundReminderAt: now.subtract(const Duration(days: 1)),
+          createdAt: now,
+          updatedAt: now,
+        ),
+        OrderRecord(
+          id: 'seed-3',
+          userId: 'local-user',
+          merchantName: 'Nordstrom Rack',
+          orderDate: now.subtract(const Duration(days: 4)),
+          totalAmount: 44.95,
+          currency: '\$',
+          source: OrderSource.gmail,
+          sourceMessageId: 'gmail-2',
+          status: OrderStatus.tracked,
+          returnDeadlineConfidence: DeadlineConfidence.unknown,
+          deadlineBasisNote: 'Need manual deadline confirmation.',
+          expectedRefundAmount: 44.95,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      ],
+      gmailConnected: false,
+      gmailImportSeeded: false,
+      userTimeZoneLabel: 'Local timezone',
+      quietHoursEnabled: true,
+    );
+  }
+}
+
+class ReturnReadyHomePage extends StatefulWidget {
+  const ReturnReadyHomePage({super.key});
 
   @override
-  void dispose() {
-    _pantryAutocompleteController.dispose();
-    super.dispose();
-  }
+  State<ReturnReadyHomePage> createState() => _ReturnReadyHomePageState();
+}
+
+class _ReturnReadyHomePageState extends State<ReturnReadyHomePage> {
+  static const _prefsKey = 'return_ready_state_v1';
+
+  AppState _state = AppState.seed();
+  bool _loading = true;
+  int _tabIndex = 0;
+  InboxFilter _filter = InboxFilter.all;
 
   @override
   void initState() {
@@ -59,110 +446,121 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString(_prefsKey);
+    final raw = prefs.getString(_prefsKey);
+    if (raw == null) {
+      setState(() => _loading = false);
+      return;
+    }
+
     setState(() {
-      _state = saved == null ? seedPlannerState() : PlannerState.decode(saved);
-      _bundle = _state.plan.isEmpty
-          ? null
-          : buildPlan(preferences: _state.preferences, pantry: _state.pantry);
+      _state = AppState.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       _loading = false;
     });
   }
 
   Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefsKey, _state.encode());
+    await prefs.setString(_prefsKey, jsonEncode(_state.toJson()));
   }
 
-  Future<void> _generatePlan() async {
-    final bundle = buildPlan(
-      preferences: _state.preferences,
-      pantry: _state.pantry,
-    );
-    setState(() {
-      _bundle = bundle;
-      _state = _state.copyWith(
-        plan: bundle.meals,
-        lastPlanSummary: bundle.summary,
-      );
-      _tab = 2;
-    });
+  Future<void> _saveState(AppState next) async {
+    setState(() => _state = next);
     await _persist();
   }
 
-  Future<void> _reroll(
-    PlannedMeal meal,
-    MealAdjustmentType adjustment, {
-    String? argument,
-  }) async {
-    if (_bundle == null) return;
-    final updated = _state.plan.map((existing) {
-      if (existing.templateId != meal.templateId) return existing;
-      return rerollMeal(
-        currentMeal: meal,
-        pantry: _state.pantry,
-        preferences: _state.preferences,
-        existingMeals: _state.plan,
-        adjustment: adjustment,
-        argument: argument,
-      );
-    }).toList();
-    final summaryBundle = PlanBundle(
-      meals: updated,
-      shoppingList: buildShoppingList(updated),
-      leftovers: buildLeftoverSummary(updated, _state.pantry),
-      clarifiers: suggestClarifiers(_state.pantry, updated),
-      summary: 'Updated one meal and refreshed your shopping list.',
-    );
-    setState(() {
-      _bundle = summaryBundle;
-      _state = _state.copyWith(
-        plan: updated,
-        lastPlanSummary: summaryBundle.summary,
-      );
-    });
-    await _persist();
-  }
-
-  List<String> get _pantrySuggestions {
-    final options = {
-      ...kPantrySuggestions,
-      ...buildMealTemplates().expand(
-        (template) => template.ingredients.map(
-          (item) => canonicalizeIngredient(item.name),
+  Future<void> _connectGmail() async {
+    final now = DateTime.now();
+    var next = _state.copyWith(gmailConnected: true);
+    if (!_state.gmailImportSeeded) {
+      final imports = [
+        OrderRecord(
+          id: 'gmail-${now.millisecondsSinceEpoch}',
+          userId: 'local-user',
+          merchantName: 'Madewell',
+          orderNumber: 'MDW-1002',
+          orderDate: now.subtract(const Duration(days: 9)),
+          totalAmount: 86.50,
+          currency: '\$',
+          source: OrderSource.gmail,
+          sourceMessageId: 'gmail-3',
+          status: OrderStatus.tracked,
+          returnDeadlineDate: now.add(const Duration(days: 6)),
+          returnDeadlineConfidence: DeadlineConfidence.estimated,
+          deadlineBasisNote: 'Estimated from merchant policy using order date.',
+          merchantReturnUrl: 'https://www.madewell.com/orders',
+          expectedRefundAmount: 86.50,
+          createdAt: now,
+          updatedAt: now,
         ),
-      ),
-    }.toList()..sort();
-    return options;
-  }
-
-  void _addPantryItem(PantryItem item) {
-    final normalized = item.name.trim().toLowerCase();
-    if (normalized.isEmpty) return;
-    final exists = _state.pantry.any(
-      (candidate) => candidate.name.trim().toLowerCase() == normalized,
-    );
-    if (exists) return;
-    setState(() {
-      _state = _state.copyWith(
-        pantry: [
-          ..._state.pantry,
-          item.copyWith(name: canonicalizeIngredient(item.name.trim())),
-        ],
+      ];
+      next = next.copyWith(
+        gmailImportSeeded: true,
+        orders: [...imports, ...next.orders],
       );
-    });
-    _persist();
+    }
+    await _saveState(next);
   }
 
-  void _removePantryItem(PantryItem item) {
-    setState(() {
-      _state = _state.copyWith(
-        pantry: _state.pantry
-            .where((candidate) => candidate.id != item.id)
+  Future<void> _disconnectGmail() async {
+    await _saveState(_state.copyWith(gmailConnected: false));
+  }
+
+  Future<void> _upsertOrder(OrderRecord order) async {
+    final orders = [..._state.orders];
+    final index = orders.indexWhere((candidate) => candidate.id == order.id);
+    if (index >= 0) {
+      orders[index] = order.copyWith(updatedAt: DateTime.now());
+    } else {
+      orders.insert(0, order);
+    }
+    await _saveState(_state.copyWith(orders: orders));
+  }
+
+  Future<void> _deleteOrder(OrderRecord order) async {
+    await _saveState(
+      _state.copyWith(
+        orders: _state.orders
+            .where((candidate) => candidate.id != order.id)
             .toList(),
-      );
-    });
-    _persist();
+      ),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Deleted ${order.merchantName} order.')),
+    );
+  }
+
+  Future<void> _showOrderForm({OrderRecord? existing}) async {
+    final result = await showModalBottomSheet<OrderRecord>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => OrderFormSheet(existing: existing),
+    );
+    if (result == null) return;
+    await _upsertOrder(result);
+  }
+
+  Future<void> _openOrderDetails(OrderRecord order) async {
+    final action = await showModalBottomSheet<_OrderActionResult>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => OrderDetailSheet(order: order),
+    );
+    if (action == null) return;
+
+    switch (action.type) {
+      case _OrderActionType.save:
+        await _upsertOrder(action.order!);
+        break;
+      case _OrderActionType.edit:
+        await _showOrderForm(existing: order);
+        break;
+      case _OrderActionType.delete:
+        await _deleteOrder(order);
+        break;
+    }
   }
 
   @override
@@ -171,936 +569,1056 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final pages = [
-      SetupScreen(
-        preferences: _state.preferences,
-        onChanged: (preferences) {
-          setState(() => _state = _state.copyWith(preferences: preferences));
-          _persist();
-        },
-        onContinue: () => setState(() => _tab = 1),
-      ),
-      PantryScreen(
-        pantry: _state.pantry,
-        suggestions: _pantrySuggestions,
-        autocompleteController: _pantryAutocompleteController,
-        onAdd: _addPantryItem,
-        onRemove: _removePantryItem,
-        onGenerate: _generatePlan,
-      ),
-      PlanScreen(
-        plan: _state.plan,
-        summary: _state.lastPlanSummary,
-        clarifiers: _bundle?.clarifiers ?? const [],
-        onViewMeal: _showMealDetails,
-      ),
-      ShoppingScreen(
-        bundle: _bundle,
-        feedback: _shoppingFeedback,
-        onCopy: _copyShoppingList,
-      ),
-      LeftoversScreen(bundle: _bundle),
-    ];
+    final filteredOrders = _applyFilter(_state.orders, _filter);
+    final layout = LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 1000;
+        final dashboard = DashboardTab(
+          state: _state,
+          onConnectGmail: _connectGmail,
+          onDisconnectGmail: _disconnectGmail,
+          onAddOrder: () => _showOrderForm(),
+          onOpenOrder: _openOrderDetails,
+        );
+        final inbox = OrdersInboxTab(
+          orders: filteredOrders,
+          selectedFilter: _filter,
+          onFilterChanged: (value) => setState(() => _filter = value),
+          onAddOrder: () => _showOrderForm(),
+          onOpenOrder: _openOrderDetails,
+        );
+        final setup = SetupTab(
+          state: _state,
+          onConnectGmail: _connectGmail,
+          onDisconnectGmail: _disconnectGmail,
+          onAddOrder: () => _showOrderForm(),
+        );
+
+        final pages = [dashboard, inbox, setup];
+        if (!wide) return pages[_tabIndex];
+
+        return Row(
+          children: [
+            NavigationRail(
+              selectedIndex: _tabIndex,
+              onDestinationSelected: (value) =>
+                  setState(() => _tabIndex = value),
+              labelType: NavigationRailLabelType.all,
+              destinations: const [
+                NavigationRailDestination(
+                  icon: Icon(Icons.space_dashboard_outlined),
+                  selectedIcon: Icon(Icons.space_dashboard),
+                  label: Text('Dashboard'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.inbox_outlined),
+                  selectedIcon: Icon(Icons.inbox),
+                  label: Text('Inbox'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.settings_outlined),
+                  selectedIcon: Icon(Icons.settings),
+                  label: Text('Setup'),
+                ),
+              ],
+            ),
+            const VerticalDivider(width: 1),
+            Expanded(child: pages[_tabIndex]),
+          ],
+        );
+      },
+    );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('AI Home Food Planner')),
-      body: pages[_tab],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (value) => setState(() => _tab = value),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.tune), label: 'Setup'),
-          NavigationDestination(icon: Icon(Icons.kitchen), label: 'Pantry'),
-          NavigationDestination(
-            icon: Icon(Icons.calendar_view_week),
-            label: 'Plan',
+      appBar: AppBar(
+        title: const Text('ReturnReady'),
+        actions: [
+          IconButton(
+            tooltip: 'Add order',
+            onPressed: () => _showOrderForm(),
+            icon: const Icon(Icons.add_circle_outline),
           ),
-          NavigationDestination(icon: Icon(Icons.shopping_cart), label: 'Shop'),
-          NavigationDestination(icon: Icon(Icons.eco), label: 'Leftovers'),
+        ],
+      ),
+      body: layout,
+      bottomNavigationBar: MediaQuery.of(context).size.width < 1000
+          ? NavigationBar(
+              selectedIndex: _tabIndex,
+              onDestinationSelected: (value) =>
+                  setState(() => _tabIndex = value),
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.space_dashboard),
+                  label: 'Dashboard',
+                ),
+                NavigationDestination(icon: Icon(Icons.inbox), label: 'Inbox'),
+                NavigationDestination(
+                  icon: Icon(Icons.settings),
+                  label: 'Setup',
+                ),
+              ],
+            )
+          : null,
+    );
+  }
+}
+
+List<OrderRecord> _applyFilter(List<OrderRecord> orders, InboxFilter filter) {
+  final now = DateTime.now();
+  final sorted = [...orders]
+    ..sort((a, b) {
+      final aUrgency = _urgencyScore(a, now);
+      final bUrgency = _urgencyScore(b, now);
+      if (aUrgency != bUrgency) return bUrgency.compareTo(aUrgency);
+      return b.updatedAt.compareTo(a.updatedAt);
+    });
+
+  return sorted.where((order) {
+    switch (filter) {
+      case InboxFilter.all:
+        return true;
+      case InboxFilter.actionNeeded:
+        final days = order.daysUntilDeadline(now);
+        return order.status == OrderStatus.mightReturn ||
+            order.status == OrderStatus.tracked ||
+            (days != null && days <= 3) ||
+            order.returnDeadlineConfidence == DeadlineConfidence.unknown;
+      case InboxFilter.waitingForRefund:
+        return order.status == OrderStatus.waitingForRefund;
+      case InboxFilter.refunded:
+        return order.status == OrderStatus.refunded;
+    }
+  }).toList();
+}
+
+int _urgencyScore(OrderRecord order, DateTime now) {
+  if (order.status == OrderStatus.waitingForRefund) return 90;
+  if (order.status == OrderStatus.mightReturn) return 80;
+  final days = order.daysUntilDeadline(now);
+  if (days != null && days <= 1) return 100;
+  if (days != null && days <= 3) return 95;
+  if (order.returnDeadlineConfidence == DeadlineConfidence.unknown) return 70;
+  if (order.status == OrderStatus.refunded) return 10;
+  return 50;
+}
+
+class DashboardTab extends StatelessWidget {
+  const DashboardTab({
+    super.key,
+    required this.state,
+    required this.onConnectGmail,
+    required this.onDisconnectGmail,
+    required this.onAddOrder,
+    required this.onOpenOrder,
+  });
+
+  final AppState state;
+  final Future<void> Function() onConnectGmail;
+  final Future<void> Function() onDisconnectGmail;
+  final VoidCallback onAddOrder;
+  final Future<void> Function(OrderRecord order) onOpenOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final orders = [...state.orders];
+    orders.sort(
+      (a, b) => _urgencyScore(b, now).compareTo(_urgencyScore(a, now)),
+    );
+
+    final nearDeadline = orders.where((order) {
+      final days = order.daysUntilDeadline(now);
+      return days != null && days <= 3 && order.status != OrderStatus.refunded;
+    }).toList();
+    final waitingRefund = orders
+        .where((order) => order.status == OrderStatus.waitingForRefund)
+        .toList();
+    final atRiskAmount = moneyAtRisk(orders, now);
+    final knownDeadlineCount = orders
+        .where((order) => order.deadlineKnown)
+        .length;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              _MetricCard(
+                title: 'Money at risk',
+                value: '\$${atRiskAmount.toStringAsFixed(2)}',
+                detail: 'Might Return + Waiting for Refund',
+                icon: Icons.attach_money,
+              ),
+              _MetricCard(
+                title: 'Deadlines within 3 days',
+                value: '${nearDeadline.length}',
+                detail: 'Highest-priority action surface',
+                icon: Icons.timer_outlined,
+              ),
+              _MetricCard(
+                title: 'Waiting for refund',
+                value: '${waitingRefund.length}',
+                detail: 'Follow up after 7 and 14 days',
+                icon: Icons.refresh,
+              ),
+              _MetricCard(
+                title: 'Known deadlines',
+                value: '$knownDeadlineCount / ${orders.length}',
+                detail: 'Unknown deadlines prompt manual follow-up',
+                icon: Icons.verified_outlined,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _SectionCard(
+            title: 'Launch wedge',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Never miss a return window, and do not forget unfinished refunds.',
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: onAddOrder,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add order manually'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: state.gmailConnected
+                          ? onDisconnectGmail
+                          : onConnectGmail,
+                      icon: Icon(
+                        state.gmailConnected
+                            ? Icons.link_off
+                            : Icons.mail_outline,
+                      ),
+                      label: Text(
+                        state.gmailConnected
+                            ? 'Disconnect Gmail'
+                            : 'Connect Gmail',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _SectionCard(
+            title: 'Action queue',
+            child: Column(
+              children: [
+                if (orders.isEmpty)
+                  const ListTile(
+                    title: Text('No orders yet'),
+                    subtitle: Text(
+                      'Add a manual order or connect Gmail to get started.',
+                    ),
+                  ),
+                for (final order in orders.take(6))
+                  OrderTile(order: order, onTap: () => onOpenOrder(order)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _SectionCard(
+            title: 'Reminder rules',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('• Deadline reminders: 7, 3, and 1 day before deadline.'),
+                Text(
+                  '• Same-day reminders only for orders marked Might Return.',
+                ),
+                Text('• Unknown deadlines trigger “Add return deadline”.'),
+                Text(
+                  '• Refund follow-up: 7 days after drop-off, then 14 days if unresolved.',
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
-
-  Future<void> _showMealDetails(PlannedMeal meal) async {
-    final action = await showModalBottomSheet<_MealAction>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => MealDetailSheet(meal: meal),
-    );
-    if (action == null) return;
-    await _reroll(meal, action.type, argument: action.argument);
-  }
-
-  Future<void> _copyShoppingList() async {
-    if (_bundle == null) return;
-    final lines = <String>['AI Home Food Planner shopping list'];
-    for (final entry in _bundle!.shoppingList.entries) {
-      lines.add('');
-      lines.add(entry.key.name.toUpperCase());
-      for (final item in entry.value) {
-        final suffix = item.isCheckIfHave ? ' (check if you have)' : '';
-        lines.add('- ${item.name}: ${item.quantity}$suffix');
-      }
-    }
-    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
-    setState(
-      () => _shoppingFeedback = 'Copied a share-ready list to clipboard.',
-    );
-  }
 }
 
-class SetupScreen extends StatefulWidget {
-  const SetupScreen({
+double moneyAtRisk(List<OrderRecord> orders, DateTime now) {
+  double total = 0;
+  for (final order in orders) {
+    final days = order.daysUntilDeadline(now);
+    final notExpired = days == null || days >= 0;
+    if (order.status == OrderStatus.mightReturn &&
+        order.deadlineKnown &&
+        notExpired) {
+      total += order.totalAmount;
+    }
+    if (order.status == OrderStatus.waitingForRefund) {
+      total += order.expectedRefundAmount ?? order.totalAmount;
+    }
+  }
+  return total;
+}
+
+class OrdersInboxTab extends StatelessWidget {
+  const OrdersInboxTab({
     super.key,
-    required this.preferences,
-    required this.onChanged,
-    required this.onContinue,
+    required this.orders,
+    required this.selectedFilter,
+    required this.onFilterChanged,
+    required this.onAddOrder,
+    required this.onOpenOrder,
   });
 
-  final Preferences preferences;
-  final ValueChanged<Preferences> onChanged;
-  final VoidCallback onContinue;
+  final List<OrderRecord> orders;
+  final InboxFilter selectedFilter;
+  final ValueChanged<InboxFilter> onFilterChanged;
+  final VoidCallback onAddOrder;
+  final Future<void> Function(OrderRecord order) onOpenOrder;
 
   @override
-  State<SetupScreen> createState() => _SetupScreenState();
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: InboxFilter.values
+                .map(
+                  (filter) => ChoiceChip(
+                    label: Text(filter.label),
+                    selected: filter == selectedFilter,
+                    onSelected: (_) => onFilterChanged(filter),
+                  ),
+                )
+                .toList(),
+          ),
+          const SizedBox(height: 16),
+          _SectionCard(
+            title: 'Tracked orders',
+            child: Column(
+              children: [
+                if (orders.isEmpty)
+                  ListTile(
+                    title: const Text('No orders match this filter'),
+                    subtitle: const Text(
+                      'Try a different inbox filter or add your first order.',
+                    ),
+                    trailing: FilledButton(
+                      onPressed: onAddOrder,
+                      child: const Text('Add order'),
+                    ),
+                  ),
+                for (final order in orders)
+                  OrderTile(order: order, onTap: () => onOpenOrder(order)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _SetupScreenState extends State<SetupScreen> {
-  late final TextEditingController _exclusionsController;
-  late final TextEditingController _dislikesController;
+class SetupTab extends StatelessWidget {
+  const SetupTab({
+    super.key,
+    required this.state,
+    required this.onConnectGmail,
+    required this.onDisconnectGmail,
+    required this.onAddOrder,
+  });
+
+  final AppState state;
+  final Future<void> Function() onConnectGmail;
+  final Future<void> Function() onDisconnectGmail;
+  final VoidCallback onAddOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _SectionCard(
+            title: 'Setup flow',
+            child: Column(
+              children: [
+                _StepTile(
+                  index: 1,
+                  title: 'Create an account',
+                  subtitle:
+                      'Use the mobile app or the lightweight responsive web app.',
+                ),
+                _StepTile(
+                  index: 2,
+                  title: 'Choose a capture path',
+                  subtitle: state.gmailConnected
+                      ? 'Gmail connected for order import.'
+                      : 'Connect Gmail or start with manual order entry.',
+                  trailing: Wrap(
+                    spacing: 8,
+                    children: [
+                      FilledButton(
+                        onPressed: state.gmailConnected
+                            ? onDisconnectGmail
+                            : onConnectGmail,
+                        child: Text(
+                          state.gmailConnected
+                              ? 'Disconnect Gmail'
+                              : 'Connect Gmail',
+                        ),
+                      ),
+                      OutlinedButton(
+                        onPressed: onAddOrder,
+                        child: const Text('Manual entry'),
+                      ),
+                    ],
+                  ),
+                ),
+                _StepTile(
+                  index: 3,
+                  title: 'Understand trust levels',
+                  subtitle:
+                      'Confirmed deadlines are explicit. Estimated deadlines use merchant policy. Unknown deadlines stay manual.',
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _SectionCard(
+            title: 'Privacy and trust',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('• Gmail access is used to find order-related emails.'),
+                Text(
+                  '• Non-order emails are not surfaced as user-facing records.',
+                ),
+                Text('• Users can disconnect Gmail at any time.'),
+                Text('• Imported orders and proof attachments can be deleted.'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _SectionCard(
+            title: 'What is in MVP',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('• Orders inbox with action-focused filters'),
+                Text('• Manual order entry'),
+                Text('• Gmail import simulation path for onboarding'),
+                Text('• Order-level lifecycle from Tracked to Refunded'),
+                Text('• Refund follow-up reminders and optional proof storage'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class OrderTile extends StatelessWidget {
+  const OrderTile({super.key, required this.order, required this.onTap});
+
+  final OrderRecord order;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final deadlineText = _deadlineSummary(order, now);
+    final badgeColor = _deadlineColor(order, now, context);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      child: ListTile(
+        onTap: onTap,
+        title: Text(order.merchantName),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 4),
+            Text(
+              '${_formatDate(order.orderDate)} • ${order.amountLabel()} • ${order.status.label}',
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                Chip(label: Text(deadlineText), backgroundColor: badgeColor),
+                Chip(label: Text(order.returnDeadlineConfidence.label)),
+                if (order.source == OrderSource.gmail)
+                  const Chip(label: Text('Gmail import')),
+              ],
+            ),
+          ],
+        ),
+        trailing: const Icon(Icons.chevron_right),
+      ),
+    );
+  }
+}
+
+String _deadlineSummary(OrderRecord order, DateTime now) {
+  final days = order.daysUntilDeadline(now);
+  if (order.returnDeadlineConfidence == DeadlineConfidence.unknown ||
+      order.returnDeadlineDate == null) {
+    return 'Add return deadline';
+  }
+  if (days! < 0) return 'Deadline passed';
+  if (days == 0) return 'Deadline today';
+  return '$days day${days == 1 ? '' : 's'} left';
+}
+
+Color _deadlineColor(OrderRecord order, DateTime now, BuildContext context) {
+  final scheme = Theme.of(context).colorScheme;
+  final days = order.daysUntilDeadline(now);
+  if (order.returnDeadlineConfidence == DeadlineConfidence.unknown ||
+      days == null) {
+    return scheme.surfaceContainerHighest;
+  }
+  if (days <= 1) return scheme.errorContainer;
+  if (days <= 3) return scheme.tertiaryContainer;
+  return scheme.secondaryContainer;
+}
+
+class OrderFormSheet extends StatefulWidget {
+  const OrderFormSheet({super.key, this.existing});
+
+  final OrderRecord? existing;
+
+  @override
+  State<OrderFormSheet> createState() => _OrderFormSheetState();
+}
+
+class _OrderFormSheetState extends State<OrderFormSheet> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _merchantController;
+  late final TextEditingController _orderNumberController;
+  late final TextEditingController _amountController;
+  late final TextEditingController _currencyController;
+  late final TextEditingController _returnUrlController;
+  late final TextEditingController _notesController;
+  late final TextEditingController _basisNoteController;
+  late final TextEditingController _expectedRefundController;
+  late DateTime _orderDate;
+  DateTime? _deadlineDate;
+  late DeadlineConfidence _confidence;
 
   @override
   void initState() {
     super.initState();
-    _exclusionsController = TextEditingController(
-      text: widget.preferences.exclusions.join(', '),
+    final existing = widget.existing;
+    _merchantController = TextEditingController(
+      text: existing?.merchantName ?? '',
     );
-    _dislikesController = TextEditingController(
-      text: widget.preferences.dislikes.join(', '),
+    _orderNumberController = TextEditingController(
+      text: existing?.orderNumber ?? '',
     );
+    _amountController = TextEditingController(
+      text: existing == null ? '' : existing.totalAmount.toStringAsFixed(2),
+    );
+    _currencyController = TextEditingController(
+      text: existing?.currency ?? '\$',
+    );
+    _returnUrlController = TextEditingController(
+      text: existing?.merchantReturnUrl ?? '',
+    );
+    _notesController = TextEditingController(text: existing?.notes ?? '');
+    _basisNoteController = TextEditingController(
+      text: existing?.deadlineBasisNote ?? '',
+    );
+    _expectedRefundController = TextEditingController(
+      text: existing?.expectedRefundAmount == null
+          ? ''
+          : existing!.expectedRefundAmount!.toStringAsFixed(2),
+    );
+    _orderDate = existing?.orderDate ?? DateTime.now();
+    _deadlineDate = existing?.returnDeadlineDate;
+    _confidence =
+        existing?.returnDeadlineConfidence ?? DeadlineConfidence.unknown;
   }
 
   @override
   void dispose() {
-    _exclusionsController.dispose();
-    _dislikesController.dispose();
+    _merchantController.dispose();
+    _orderNumberController.dispose();
+    _amountController.dispose();
+    _currencyController.dispose();
+    _returnUrlController.dispose();
+    _notesController.dispose();
+    _basisNoteController.dispose();
+    _expectedRefundController.dispose();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final p = widget.preferences;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Plan 3 to 5 realistic dinners in under 5 minutes.',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Pantry-first planning, conservative shopping lists, and simple leftovers guidance.',
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        ListTile(
-          title: Text('Household size: ${p.householdSize}'),
-          subtitle: Slider(
-            min: 1,
-            max: 6,
-            divisions: 5,
-            value: p.householdSize.toDouble(),
-            onChanged: (value) =>
-                widget.onChanged(p.copyWith(householdSize: value.round())),
-          ),
-        ),
-        ListTile(
-          title: Text('Dinners this week: ${p.dinnerCount}'),
-          subtitle: Slider(
-            min: 3,
-            max: 5,
-            divisions: 2,
-            value: p.dinnerCount.toDouble(),
-            onChanged: (value) =>
-                widget.onChanged(p.copyWith(dinnerCount: value.round())),
-          ),
-        ),
-        DropdownButtonFormField<PlanMode>(
-          initialValue: p.planMode,
-          decoration: const InputDecoration(labelText: 'Planning mode'),
-          items: PlanMode.values
-              .map(
-                (mode) => DropdownMenuItem(value: mode, child: Text(mode.name)),
-              )
-              .toList(),
-          onChanged: (value) => widget.onChanged(p.copyWith(planMode: value)),
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<DietType>(
-          initialValue: p.dietType,
-          decoration: const InputDecoration(labelText: 'Diet'),
-          items: DietType.values
-              .map(
-                (diet) => DropdownMenuItem(value: diet, child: Text(diet.name)),
-              )
-              .toList(),
-          onChanged: (value) => widget.onChanged(p.copyWith(dietType: value)),
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          value: p.likesLeftovers,
-          title: const Text('Prefer leftovers'),
-          onChanged: (value) =>
-              widget.onChanged(p.copyWith(likesLeftovers: value)),
-        ),
-        TextField(
-          controller: _exclusionsController,
-          decoration: const InputDecoration(
-            labelText: 'Allergies/exclusions',
-            hintText: 'peanuts, shellfish',
-          ),
-          onChanged: (value) =>
-              widget.onChanged(p.copyWith(exclusions: _splitCsv(value))),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _dislikesController,
-          decoration: const InputDecoration(
-            labelText: 'Dislikes',
-            hintText: 'mushrooms, olives',
-          ),
-          onChanged: (value) =>
-              widget.onChanged(p.copyWith(dislikes: _splitCsv(value))),
-        ),
-        const SizedBox(height: 16),
-        FilledButton(
-          onPressed: widget.onContinue,
-          child: const Text('Continue to pantry'),
-        ),
-      ],
-    );
-  }
-}
-
-class PantryScreen extends StatefulWidget {
-  const PantryScreen({
-    super.key,
-    required this.pantry,
-    required this.suggestions,
-    required this.autocompleteController,
-    required this.onAdd,
-    required this.onRemove,
-    required this.onGenerate,
-  });
-
-  final List<PantryItem> pantry;
-  final List<String> suggestions;
-  final TextEditingController autocompleteController;
-  final ValueChanged<PantryItem> onAdd;
-  final ValueChanged<PantryItem> onRemove;
-  final VoidCallback onGenerate;
-
-  @override
-  State<PantryScreen> createState() => _PantryScreenState();
-}
-
-class _PantryScreenState extends State<PantryScreen> {
-  QuantityState _quantityState = QuantityState.some;
-  ItemUrgency _urgency = ItemUrgency.unknown;
-  String? _photoLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Pantry snapshot',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Add 3 to 10 items for the strongest pantry-first plan. Use free text or autocomplete, then keep quantity and urgency loose.',
-                ),
-                const SizedBox(height: 12),
-                Autocomplete<String>(
-                  optionsBuilder: (textEditingValue) {
-                    final query = textEditingValue.text.trim().toLowerCase();
-                    if (query.isEmpty) return widget.suggestions.take(8);
-                    return widget.suggestions
-                        .where((item) => item.toLowerCase().contains(query))
-                        .take(8);
-                  },
-                  onSelected: (value) =>
-                      widget.autocompleteController.text = value,
-                  fieldViewBuilder:
-                      (context, controller, focusNode, onFieldSubmitted) {
-                        controller.value = widget.autocompleteController.value;
-                        return TextField(
-                          controller: controller,
-                          focusNode: focusNode,
-                          decoration: const InputDecoration(
-                            labelText: 'Add pantry item',
-                            hintText: 'onion, greek yogurt, salmon',
-                          ),
-                        );
-                      },
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    DropdownButton<QuantityState>(
-                      value: _quantityState,
-                      onChanged: (value) => setState(
-                        () => _quantityState = value ?? QuantityState.some,
-                      ),
-                      items: QuantityState.values
-                          .map(
-                            (value) => DropdownMenuItem(
-                              value: value,
-                              child: Text('Amount: ${value.name}'),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                    DropdownButton<ItemUrgency>(
-                      value: _urgency,
-                      onChanged: (value) => setState(
-                        () => _urgency = value ?? ItemUrgency.unknown,
-                      ),
-                      items: ItemUrgency.values
-                          .map(
-                            (value) => DropdownMenuItem(
-                              value: value,
-                              child: Text('Timing: ${value.name}'),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: _addCustomItem,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add pantry item'),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: kPantrySuggestions.map((item) {
-                    return ActionChip(
-                      label: Text(item),
-                      onPressed:
-                          widget.pantry.any(
-                            (existing) => existing.name.toLowerCase() == item,
-                          )
-                          ? null
-                          : () => widget.onAdd(
-                              PantryItem(
-                                id: DateTime.now().microsecondsSinceEpoch
-                                    .toString(),
-                                name: item,
-                                quantityState: QuantityState.some,
-                                urgency:
-                                    const {
-                                      'spinach',
-                                      'broccoli',
-                                      'chicken',
-                                    }.contains(item)
-                                    ? ItemUrgency.useSoon
-                                    : ItemUrgency.unknown,
-                              ),
-                            ),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () =>
-                      _showPhotoSuggestionSheet(context, widget.onAdd),
-                  icon: const Icon(Icons.photo_camera_back_outlined),
-                  label: const Text('Upload pantry photo'),
-                ),
-                if (_photoLabel != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Latest photo: $_photoLabel',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        ...widget.pantry.map(
-          (item) => Card(
-            child: ListTile(
-              title: Text(item.name),
-              subtitle: Text(
-                '${item.quantityState.name} • ${item.urgency.name}',
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete_outline),
-                onPressed: () => widget.onRemove(item),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        FilledButton(
-          onPressed: widget.onGenerate,
-          child: const Text('Generate plan'),
-        ),
-      ],
-    );
-  }
-
-  void _addCustomItem() {
-    final raw = widget.autocompleteController.text.trim();
-    if (raw.isEmpty) return;
-    widget.onAdd(
-      PantryItem(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        name: raw,
-        quantityState: _quantityState,
-        urgency: _urgency,
-      ),
-    );
-    widget.autocompleteController.clear();
-  }
-
-  Future<void> _showPhotoSuggestionSheet(
-    BuildContext context,
-    ValueChanged<PantryItem> onAdd,
-  ) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.single;
-    final suggestions = _photoSuggestionsForFile(file.name, file.bytes);
-    if (!mounted) return;
-    setState(() => _photoLabel = file.name);
-    if (!context.mounted) return;
-    await showModalBottomSheet<void>(
+  Future<void> _pickDate({
+    required DateTime initial,
+    required ValueChanged<DateTime> onPicked,
+  }) async {
+    final selected = await showDatePicker(
       context: context,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Suggested from photo',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Picked ${file.name}. These suggestions are optional and nothing is added until you confirm it.',
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: suggestions.map((name) {
-                  return FilledButton.tonal(
-                    onPressed: () {
-                      onAdd(
-                        PantryItem(
-                          id: DateTime.now().microsecondsSinceEpoch.toString(),
-                          name: name,
-                          quantityState: QuantityState.some,
-                          urgency: name == 'spinach'
-                              ? ItemUrgency.useSoon
-                              : ItemUrgency.unknown,
-                        ),
-                      );
-                      Navigator.pop(context);
-                    },
-                    child: Text('Add $name'),
-                  );
-                }).toList(),
-              ),
-            ],
-          ),
-        ),
-      ),
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
     );
+    if (selected != null) onPicked(selected);
   }
 
-  List<String> _photoSuggestionsForFile(String name, Uint8List? bytes) {
-    final lowered = name.toLowerCase();
-    final suggestions = <String>{};
-    final keywordMap = {
-      'spin': 'spinach',
-      'broc': 'broccoli',
-      'carrot': 'carrots',
-      'pepper': 'bell pepper',
-      'yogurt': 'yogurt',
-      'egg': 'eggs',
-      'rice': 'rice',
-      'chicken': 'chicken',
-      'cheddar': 'cheddar',
-    };
-    keywordMap.forEach((keyword, item) {
-      if (lowered.contains(keyword)) {
-        suggestions.add(item);
-      }
-    });
-    if (suggestions.isEmpty && bytes != null && bytes.isNotEmpty) {
-      suggestions.addAll(['spinach', 'carrots', 'yogurt']);
-    }
-    if (suggestions.isEmpty) {
-      suggestions.addAll(['spinach', 'carrots', 'yogurt']);
-    }
-    return suggestions.toList()..sort();
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    final now = DateTime.now();
+    final existing = widget.existing;
+    final amount = double.parse(_amountController.text.trim());
+    final expectedRefund = _expectedRefundController.text.trim().isEmpty
+        ? amount
+        : double.tryParse(_expectedRefundController.text.trim()) ?? amount;
+
+    final order = OrderRecord(
+      id:
+          existing?.id ??
+          'manual-${now.microsecondsSinceEpoch}-${Random().nextInt(9999)}',
+      userId: 'local-user',
+      merchantName: _merchantController.text.trim(),
+      orderNumber: _emptyToNull(_orderNumberController.text),
+      orderDate: _orderDate,
+      totalAmount: amount,
+      currency: _currencyController.text.trim().isEmpty
+          ? '\$'
+          : _currencyController.text.trim(),
+      source: existing?.source ?? OrderSource.manual,
+      sourceMessageId: existing?.sourceMessageId,
+      status: existing?.status ?? OrderStatus.tracked,
+      returnDeadlineDate: _confidence == DeadlineConfidence.unknown
+          ? null
+          : _deadlineDate,
+      returnDeadlineConfidence: _confidence,
+      deadlineBasisNote: _emptyToNull(_basisNoteController.text),
+      merchantReturnUrl: _emptyToNull(_returnUrlController.text),
+      notes: _emptyToNull(_notesController.text),
+      expectedRefundAmount: expectedRefund,
+      actualRefundAmount: existing?.actualRefundAmount,
+      refundReceivedDate: existing?.refundReceivedDate,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      startedAt: existing?.startedAt,
+      droppedOffAt: existing?.droppedOffAt,
+      methodNote: existing?.methodNote,
+      proofAttachmentUrl: existing?.proofAttachmentUrl,
+      lastRefundReminderAt: existing?.lastRefundReminderAt,
+    );
+
+    Navigator.of(context).pop(order);
   }
-}
-
-class PlanScreen extends StatelessWidget {
-  const PlanScreen({
-    super.key,
-    required this.plan,
-    required this.summary,
-    required this.clarifiers,
-    required this.onViewMeal,
-  });
-
-  final List<PlannedMeal> plan;
-  final String summary;
-  final List<Clarifier> clarifiers;
-  final ValueChanged<PlannedMeal> onViewMeal;
 
   @override
   Widget build(BuildContext context) {
-    if (plan.isEmpty) {
-      return ListView(
-        padding: const EdgeInsets.all(16),
-        children: const [
-          Card(
-            child: ListTile(
-              title: Text('No plan yet'),
-              subtitle: Text(
-                'Generate your weekly dinners from the pantry tab.',
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: ListTile(
-            title: const Text('Weekly plan'),
-            subtitle: Text(summary),
-          ),
-        ),
-        if (clarifiers.isNotEmpty)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Planned with current pantry info',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  ...clarifiers.map(
-                    (clarifier) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.help_outline),
-                      title: Text(clarifier.question),
-                      subtitle: Text(clarifier.impact),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ...plan.map(
-          (meal) => Card(
-            child: ListTile(
-              title: Text(meal.title),
-              subtitle: Text(
-                '${meal.rationale}\n${meal.minutes} min • ${meal.pattern}\n'
-                'Main: ${meal.ingredients.take(3).map((item) => canonicalizeIngredient(item.name)).join(', ')}\n'
-                'Pantry: ${meal.pantryUsed.isEmpty ? 'none' : meal.pantryUsed.join(', ')} • '
-                'Buy: ${meal.buyNeeded.isEmpty ? 'none' : meal.buyNeeded.map((item) => canonicalizeIngredient(item.name)).join(', ')}',
-              ),
-              isThreeLine: true,
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => onViewMeal(meal),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class ShoppingScreen extends StatelessWidget {
-  const ShoppingScreen({
-    super.key,
-    required this.bundle,
-    required this.feedback,
-    required this.onCopy,
-  });
-
-  final PlanBundle? bundle;
-  final String? feedback;
-  final VoidCallback onCopy;
-
-  @override
-  Widget build(BuildContext context) {
-    if (bundle == null) {
-      return const Center(
-        child: Text('Generate a plan to see the gap-only shopping list.'),
-      );
-    }
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + bottom),
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
+                Text(
+                  widget.existing == null ? 'Add order' : 'Edit order',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _merchantController,
+                  decoration: const InputDecoration(labelText: 'Merchant name'),
+                  validator: (value) =>
+                      value == null || value.trim().isEmpty ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
-                      child: Text(
-                        'Gap-only shopping list',
-                        style: Theme.of(context).textTheme.titleMedium,
+                      child: TextFormField(
+                        controller: _amountController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Total amount',
+                        ),
+                        validator: (value) =>
+                            double.tryParse(value ?? '') == null
+                            ? 'Enter a valid amount'
+                            : null,
                       ),
                     ),
-                    FilledButton.tonalIcon(
-                      onPressed: onCopy,
-                      icon: const Icon(Icons.copy_all_outlined),
-                      label: const Text('Copy list'),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 90,
+                      child: TextFormField(
+                        controller: _currencyController,
+                        decoration: const InputDecoration(
+                          labelText: 'Currency',
+                        ),
+                      ),
                     ),
                   ],
                 ),
-                if (feedback != null) ...[
-                  const SizedBox(height: 8),
-                  Text(feedback!),
-                ],
-              ],
-            ),
-          ),
-        ),
-        ...bundle!.shoppingList.entries.map((entry) {
-          return Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    entry.key.name.toUpperCase(),
-                    style: Theme.of(context).textTheme.titleMedium,
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _orderNumberController,
+                  decoration: const InputDecoration(
+                    labelText: 'Order number (optional)',
                   ),
-                  const SizedBox(height: 8),
-                  ...entry.value.map(
-                    (item) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(item.name),
-                      subtitle: Text(item.quantity),
-                      trailing: item.isCheckIfHave
-                          ? const Chip(label: Text('check if you have'))
-                          : null,
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Order date'),
+                  subtitle: Text(_formatDate(_orderDate)),
+                  trailing: OutlinedButton(
+                    onPressed: () => _pickDate(
+                      initial: _orderDate,
+                      onPicked: (value) => setState(() => _orderDate = value),
+                    ),
+                    child: const Text('Choose'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<DeadlineConfidence>(
+                  initialValue: _confidence,
+                  decoration: const InputDecoration(
+                    labelText: 'Deadline status',
+                  ),
+                  items: DeadlineConfidence.values
+                      .map(
+                        (value) => DropdownMenuItem(
+                          value: value,
+                          child: Text(value.label),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => setState(
+                    () => _confidence = value ?? DeadlineConfidence.unknown,
+                  ),
+                ),
+                if (_confidence != DeadlineConfidence.unknown) ...[
+                  const SizedBox(height: 12),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Return deadline'),
+                    subtitle: Text(
+                      _deadlineDate == null
+                          ? 'Pick a date'
+                          : _formatDate(_deadlineDate!),
+                    ),
+                    trailing: OutlinedButton(
+                      onPressed: () => _pickDate(
+                        initial: _deadlineDate ?? _orderDate,
+                        onPicked: (value) =>
+                            setState(() => _deadlineDate = value),
+                      ),
+                      child: const Text('Choose'),
                     ),
                   ),
                 ],
-              ),
-            ),
-          );
-        }),
-      ],
-    );
-  }
-}
-
-class LeftoversScreen extends StatelessWidget {
-  const LeftoversScreen({super.key, required this.bundle});
-
-  final PlanBundle? bundle;
-
-  @override
-  Widget build(BuildContext context) {
-    if (bundle == null) {
-      return const Center(
-        child: Text('Generate a plan to see leftovers guidance.'),
-      );
-    }
-    final leftovers = bundle!.leftovers;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Likely used up',
-                  style: Theme.of(context).textTheme.titleMedium,
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _basisNoteController,
+                  decoration: const InputDecoration(
+                    labelText: 'Deadline basis note (optional)',
+                  ),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  leftovers.likelyUsedUp.isEmpty
-                      ? 'Nothing clearly used up yet.'
-                      : leftovers.likelyUsedUp.join(', '),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _returnUrlController,
+                  decoration: const InputDecoration(
+                    labelText: 'Merchant return URL (optional)',
+                  ),
                 ),
-              ],
-            ),
-          ),
-        ),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Likely remaining',
-                  style: Theme.of(context).textTheme.titleMedium,
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _expectedRefundController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Expected refund amount (optional)',
+                  ),
                 ),
-                const SizedBox(height: 8),
-                Text(leftovers.likelyRemaining.join(', ')),
-              ],
-            ),
-          ),
-        ),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Follow-on ideas',
-                  style: Theme.of(context).textTheme.titleMedium,
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _notesController,
+                  minLines: 3,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes (optional)',
+                  ),
                 ),
-                const SizedBox(height: 8),
-                ...leftovers.suggestions.map(
-                  (tip) => ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(tip),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: _submit,
+                  child: Text(
+                    widget.existing == null ? 'Save order' : 'Save changes',
                   ),
                 ),
               ],
             ),
           ),
         ),
-      ],
+      ),
     );
   }
 }
 
-class MealDetailSheet extends StatefulWidget {
-  const MealDetailSheet({super.key, required this.meal});
+class OrderDetailSheet extends StatefulWidget {
+  const OrderDetailSheet({super.key, required this.order});
 
-  final PlannedMeal meal;
+  final OrderRecord order;
 
   @override
-  State<MealDetailSheet> createState() => _MealDetailSheetState();
+  State<OrderDetailSheet> createState() => _OrderDetailSheetState();
 }
 
-class _MealDetailSheetState extends State<MealDetailSheet> {
-  String? _avoidIngredient;
-  String? _useMoreIngredient;
+class _OrderDetailSheetState extends State<OrderDetailSheet> {
+  late OrderRecord _order;
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
-    _avoidIngredient = widget.meal.ingredients.isEmpty
-        ? null
-        : canonicalizeIngredient(widget.meal.ingredients.first.name);
-    _useMoreIngredient = widget.meal.pantryUsed.isNotEmpty
-        ? widget.meal.pantryUsed.first
-        : (widget.meal.ingredients.isEmpty
-              ? null
-              : canonicalizeIngredient(widget.meal.ingredients.first.name));
+    _order = widget.order;
+  }
+
+  void _save() {
+    Navigator.of(
+      context,
+    ).pop(_OrderActionResult.save(_order.copyWith(updatedAt: DateTime.now())));
+  }
+
+  Future<void> _pickProof() async {
+    final file = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 70,
+    );
+    if (file == null) return;
+    setState(() {
+      _order = _order.copyWith(proofAttachmentUrl: file.path);
+    });
+  }
+
+  void _markMightReturn() {
+    setState(() {
+      _order = _order.copyWith(
+        status: OrderStatus.mightReturn,
+        expectedRefundAmount: _order.expectedRefundAmount ?? _order.totalAmount,
+      );
+    });
+  }
+
+  void _markReturnStarted() {
+    final now = DateTime.now();
+    setState(() {
+      _order = _order.copyWith(
+        status: OrderStatus.returnStarted,
+        startedAt: _order.startedAt ?? now,
+      );
+    });
+  }
+
+  void _markDroppedOff() {
+    final now = DateTime.now();
+    setState(() {
+      _order = _order.copyWith(
+        status: OrderStatus.waitingForRefund,
+        droppedOffAt: _order.droppedOffAt ?? now,
+        expectedRefundAmount: _order.expectedRefundAmount ?? _order.totalAmount,
+        lastRefundReminderAt: now.add(const Duration(days: 7)),
+      );
+    });
+  }
+
+  Future<void> _markRefundReceived() async {
+    final controller = TextEditingController(
+      text:
+          (_order.actualRefundAmount ??
+                  _order.expectedRefundAmount ??
+                  _order.totalAmount)
+              .toStringAsFixed(2),
+    );
+    final result = await showDialog<double>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Mark refund received'),
+        content: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Actual refund amount'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(
+              double.tryParse(controller.text.trim()) ?? _order.totalAmount,
+            ),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    setState(() {
+      _order = _order.copyWith(
+        status: OrderStatus.refunded,
+        actualRefundAmount: result,
+        refundReceivedDate: DateTime.now(),
+      );
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final meal = widget.meal;
-    final ingredientOptions =
-        meal.ingredients
-            .map((item) => canonicalizeIngredient(item.name))
-            .toSet()
-            .toList()
-          ..sort();
-    final useMoreOptions = {...ingredientOptions, ...meal.pantryUsed}.toList()
-      ..sort();
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+    final now = DateTime.now();
+    final deadlineText = _deadlineSummary(_order, now);
+    final refundReminderText = _refundReminderText(_order, now);
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + bottom),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                meal.title,
+                _order.merchantName,
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
               const SizedBox(height: 8),
-              Text(meal.rationale),
-              const SizedBox(height: 8),
-              Text('${meal.minutes} min • ${meal.pattern}'),
-              const SizedBox(height: 12),
               Text(
-                'Full ingredient list',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              ...meal.ingredients.map(
-                (item) => ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(canonicalizeIngredient(item.name)),
-                  subtitle: Text(item.quantity),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Pantry used: ${meal.pantryUsed.isEmpty ? 'none' : meal.pantryUsed.join(', ')}',
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Buy needed: ${meal.buyNeeded.isEmpty ? 'none' : meal.buyNeeded.map((item) => canonicalizeIngredient(item.name)).join(', ')}',
-              ),
-              if (meal.checkIfYouHave.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Check if you have: ${meal.checkIfYouHave.map((item) => canonicalizeIngredient(item.name)).join(', ')}',
-                ),
-              ],
-              const SizedBox(height: 12),
-              Text(
-                'Simple steps',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              ...meal.steps.asMap().entries.map(
-                (entry) => ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: CircleAvatar(
-                    radius: 12,
-                    child: Text('${entry.key + 1}'),
-                  ),
-                  title: Text(entry.value),
-                ),
+                '${_formatDate(_order.orderDate)} • ${_order.amountLabel()}',
               ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _actionButton(
-                    context,
-                    'Swap this meal',
-                    MealAdjustmentType.swap,
-                  ),
-                  _actionButton(
-                    context,
-                    'Make cheaper',
-                    MealAdjustmentType.cheaper,
-                  ),
-                  _actionButton(
-                    context,
-                    'Make faster',
-                    MealAdjustmentType.faster,
-                  ),
+                  Chip(label: Text(_order.status.label)),
+                  Chip(label: Text(deadlineText)),
+                  Chip(label: Text(_order.returnDeadlineConfidence.label)),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
+              _DetailRow(
+                label: 'Order number',
+                value: _order.orderNumber ?? 'Not saved',
+              ),
+              _DetailRow(
+                label: 'Source',
+                value: _order.source == OrderSource.gmail
+                    ? 'Gmail import'
+                    : 'Manual entry',
+              ),
+              _DetailRow(
+                label: 'Deadline basis',
+                value:
+                    _order.deadlineBasisNote ??
+                    'Unknown, manual fallback available',
+              ),
+              _DetailRow(
+                label: 'Return URL',
+                value: _order.merchantReturnUrl ?? 'Not available yet',
+              ),
+              _DetailRow(
+                label: 'Expected refund',
+                value: _order.amountLabel(
+                  _order.expectedRefundAmount ?? _order.totalAmount,
+                ),
+              ),
+              _DetailRow(label: 'Refund follow-up', value: refundReminderText),
+              _DetailRow(label: 'Notes', value: _order.notes ?? 'No notes'),
+              _DetailRow(
+                label: 'Proof attachment',
+                value: _order.proofAttachmentUrl ?? 'No proof attached',
+              ),
+              const SizedBox(height: 16),
               Text(
-                'Ingredient rerolls',
+                'Next actions',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                initialValue: _avoidIngredient,
-                decoration: const InputDecoration(
-                  labelText: 'Avoid this ingredient',
-                ),
-                items: ingredientOptions
-                    .map(
-                      (item) =>
-                          DropdownMenuItem(value: item, child: Text(item)),
-                    )
-                    .toList(),
-                onChanged: (value) => setState(() => _avoidIngredient = value),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton(
+                    onPressed: _markMightReturn,
+                    child: const Text('Mark Might Return'),
+                  ),
+                  OutlinedButton(
+                    onPressed: _markReturnStarted,
+                    child: const Text('Mark return started'),
+                  ),
+                  OutlinedButton(
+                    onPressed: _markDroppedOff,
+                    child: const Text('Mark drop-off / shipment'),
+                  ),
+                  FilledButton(
+                    onPressed: _markRefundReceived,
+                    child: const Text('Mark refund received'),
+                  ),
+                  OutlinedButton(
+                    onPressed: _pickProof,
+                    child: const Text('Attach proof'),
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              FilledButton.tonal(
-                onPressed: _avoidIngredient == null
-                    ? null
-                    : () => Navigator.pop(
-                        context,
-                        _MealAction(
-                          MealAdjustmentType.avoidIngredient,
-                          _avoidIngredient,
-                        ),
-                      ),
-                child: const Text('Reroll without selected ingredient'),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: _useMoreIngredient,
-                decoration: const InputDecoration(
-                  labelText: 'Use more of item X',
-                ),
-                items: useMoreOptions
-                    .map(
-                      (item) =>
-                          DropdownMenuItem(value: item, child: Text(item)),
-                    )
-                    .toList(),
-                onChanged: (value) =>
-                    setState(() => _useMoreIngredient = value),
-              ),
-              const SizedBox(height: 8),
-              FilledButton.tonal(
-                onPressed: _useMoreIngredient == null
-                    ? null
-                    : () => Navigator.pop(
-                        context,
-                        _MealAction(
-                          MealAdjustmentType.useMoreOfItem,
-                          _useMoreIngredient,
-                        ),
-                      ),
-                child: const Text('Reroll to use more of selected item'),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  FilledButton.icon(
+                    onPressed: _save,
+                    icon: const Icon(Icons.save),
+                    label: const Text('Save updates'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pop(const _OrderActionResult.edit()),
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Edit fields'),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pop(const _OrderActionResult.delete()),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete'),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1108,29 +1626,167 @@ class _MealDetailSheetState extends State<MealDetailSheet> {
       ),
     );
   }
+}
 
-  Widget _actionButton(
-    BuildContext context,
-    String label,
-    MealAdjustmentType type, {
-    String? argument,
-  }) {
-    return FilledButton.tonal(
-      onPressed: () => Navigator.pop(context, _MealAction(type, argument)),
-      child: Text(label),
+String _refundReminderText(OrderRecord order, DateTime now) {
+  if (order.status != OrderStatus.waitingForRefund) {
+    return 'Refund reminders only fire in Waiting for Refund.';
+  }
+  if (order.droppedOffAt == null) {
+    return 'Add a drop-off or shipment date.';
+  }
+  final first = order.droppedOffAt!.add(const Duration(days: 7));
+  final second = order.droppedOffAt!.add(const Duration(days: 14));
+  if (now.isBefore(first)) {
+    return 'First reminder scheduled for ${_formatDate(first)}.';
+  }
+  if (now.isBefore(second)) {
+    return 'Second reminder scheduled for ${_formatDate(second)} if unresolved.';
+  }
+  return 'Reminder cadence reached, user confirmation still needed.';
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.title,
+    required this.value,
+    required this.detail,
+    required this.icon,
+  });
+
+  final String title;
+  final String value;
+  final String detail;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 220,
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon),
+              const SizedBox(height: 12),
+              Text(value, style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 4),
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 6),
+              Text(detail),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
 
-class _MealAction {
-  const _MealAction(this.type, this.argument);
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({required this.title, required this.child});
 
-  final MealAdjustmentType type;
-  final String? argument;
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-List<String> _splitCsv(String value) => value
-    .split(',')
-    .map((item) => item.trim())
-    .where((item) => item.isNotEmpty)
-    .toList();
+class _StepTile extends StatelessWidget {
+  const _StepTile({
+    required this.index,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+  });
+
+  final int index;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: CircleAvatar(child: Text('$index')),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: trailing,
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 2),
+          Text(value),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatDate(DateTime date) {
+  final month = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ][date.month - 1];
+  return '$month ${date.day}, ${date.year}';
+}
+
+String? _emptyToNull(String text) {
+  final trimmed = text.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
+enum _OrderActionType { save, edit, delete }
+
+class _OrderActionResult {
+  const _OrderActionResult.save(this.order) : type = _OrderActionType.save;
+  const _OrderActionResult.edit() : type = _OrderActionType.edit, order = null;
+  const _OrderActionResult.delete()
+    : type = _OrderActionType.delete,
+      order = null;
+
+  final _OrderActionType type;
+  final OrderRecord? order;
+}

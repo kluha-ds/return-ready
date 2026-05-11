@@ -1,31 +1,29 @@
-# AI Home Food Planner
+# ReturnReady
 
-Mobile-first Flutter MVP for pantry-first dinner planning.
+ReturnReady is a mobile-first Flutter MVP for shoppers who do not want to miss return deadlines or forget unfinished refunds.
 
-## What it does
-- collects lightweight household setup and dinner-planning preferences
-- captures a rough pantry snapshot with loose quantity and urgency states
-- generates a realistic 3 to 5 dinner weekly plan from constrained meal templates
-- explains why each meal was chosen
-- builds a conservative gap-only shopping list grouped by aisle
-- supports single-meal rerolls for swap, cheaper, faster, avoid-ingredient, and use-more-of-item flows
-- shows a simple leftover and use-soon summary
-- keeps optional photo suggestions clearly suggestion-only
+## MVP included here
 
-## Product notes
-- Pantry tracking is intentionally approximate.
-- Staples such as oil and soy sauce may appear as `check if you have` instead of assumed-present.
-- The planner uses deterministic template scoring instead of freeform recipe generation.
-- State persists locally with `shared_preferences`.
+- responsive dashboard with urgency-first triage
+- orders inbox with All, Action Needed, Waiting for Refund, and Refunded filters
+- manual order entry and editing
+- Gmail onboarding flow with sample imported orders
+- order-level lifecycle from Tracked to Refunded
+- confirmed, estimated, and unknown deadline states
+- refund follow-up timing guidance and optional proof attachment
+- local persistence with SharedPreferences
 
-## Run locally
+## Product message
+
+**Never miss a return window, and do not forget unfinished refunds.**
+
+## Run
+
 ```bash
 flutter pub get
 flutter run
 ```
 
-## Verify
-```bash
-flutter analyze
-flutter test
-```
+## Notes
+
+This repo implements the final product spec as a self-contained Flutter MVP prototype. Gmail import is represented as an onboarding/demo flow rather than a live API integration, which keeps the build aligned to MVP trust and manual fallback requirements.

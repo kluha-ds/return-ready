@@ -1,5 +1,5 @@
-name: ai_home_food_planner
-description: "Mobile-first MVP for AI Home Food Planner."
+name: return_ready
+description: "Mobile-first MVP for ReturnReady."
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -10,7 +10,6 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  file_picker: ^10.3.2
   image_picker: ^1.2.0
   shared_preferences: ^2.5.3
 

@@ -1,110 +1,77 @@
-import 'package:ai_home_food_planner/demo_data.dart';
-import 'package:ai_home_food_planner/models.dart';
-import 'package:ai_home_food_planner/planner.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:return_ready/main.dart';
 
 void main() {
-  test('planner prefers pantry reuse and builds grouped shopping list', () {
-    final state = seedPlannerState();
-    final bundle = buildPlan(
-      preferences: state.preferences,
-      pantry: state.pantry,
-    );
+  test('seed state contains launch-relevant sample orders', () {
+    final state = AppState.seed();
 
-    expect(bundle.meals, hasLength(4));
+    expect(state.orders, isNotEmpty);
     expect(
-      bundle.meals.any((meal) => meal.pantryUsed.contains('spinach')),
+      state.orders.any((order) => order.status == OrderStatus.mightReturn),
       isTrue,
     );
-    expect(bundle.shoppingList.keys, isNotEmpty);
-  });
-
-  test('shopping list consolidates overlapping ingredients across meals', () {
-    final meals = [
-      const PlannedMeal(
-        templateId: 'a',
-        title: 'Meal A',
-        pattern: 'Tacos',
-        rationale: 'test',
-        minutes: 20,
-        ingredients: [],
-        steps: [],
-        pantryUsed: [],
-        buyNeeded: [
-          MealIngredient(
-            name: 'onion',
-            quantity: '1 onion',
-            aisle: Aisle.produce,
-          ),
-        ],
-        checkIfYouHave: [],
-        usedSoonItems: [],
+    expect(
+      state.orders.any((order) => order.status == OrderStatus.waitingForRefund),
+      isTrue,
+    );
+    expect(
+      state.orders.any(
+        (order) => order.returnDeadlineConfidence == DeadlineConfidence.unknown,
       ),
-      const PlannedMeal(
-        templateId: 'b',
-        title: 'Meal B',
-        pattern: 'Soup',
-        rationale: 'test',
-        minutes: 20,
-        ingredients: [],
-        steps: [],
-        pantryUsed: [],
-        buyNeeded: [
-          MealIngredient(
-            name: 'onion',
-            quantity: '1 onion',
-            aisle: Aisle.produce,
-          ),
-        ],
-        checkIfYouHave: [],
-        usedSoonItems: [],
-      ),
-    ];
-
-    final shopping = buildShoppingList(meals);
-    final onions = shopping[Aisle.produce]!.firstWhere(
-      (item) => item.name == 'onion',
+      isTrue,
     );
-
-    expect(onions.quantity, '2 onions');
   });
 
-  test('reroll use more of item biases toward that ingredient', () {
-    final state = seedPlannerState();
-    final bundle = buildPlan(
-      preferences: state.preferences,
-      pantry: state.pantry,
-    );
-    final updated = rerollMeal(
-      currentMeal: bundle.meals.first,
-      pantry: state.pantry,
-      preferences: state.preferences,
-      existingMeals: bundle.meals,
-      adjustment: MealAdjustmentType.useMoreOfItem,
-      argument: 'rice',
-    );
+  test(
+    'money at risk only counts Might Return and Waiting for Refund orders',
+    () {
+      final now = DateTime.now();
+      final orders = [
+        OrderRecord(
+          id: '1',
+          userId: 'u',
+          merchantName: 'A',
+          orderDate: now,
+          totalAmount: 100,
+          currency: '\$',
+          source: OrderSource.manual,
+          status: OrderStatus.mightReturn,
+          returnDeadlineDate: now.add(const Duration(days: 2)),
+          returnDeadlineConfidence: DeadlineConfidence.confirmed,
+          createdAt: now,
+          updatedAt: now,
+        ),
+        OrderRecord(
+          id: '2',
+          userId: 'u',
+          merchantName: 'B',
+          orderDate: now,
+          totalAmount: 50,
+          currency: '\$',
+          source: OrderSource.manual,
+          status: OrderStatus.waitingForRefund,
+          returnDeadlineConfidence: DeadlineConfidence.unknown,
+          expectedRefundAmount: 40,
+          createdAt: now,
+          updatedAt: now,
+        ),
+        OrderRecord(
+          id: '3',
+          userId: 'u',
+          merchantName: 'C',
+          orderDate: now,
+          totalAmount: 999,
+          currency: '\$',
+          source: OrderSource.manual,
+          status: OrderStatus.tracked,
+          returnDeadlineDate: now.add(const Duration(days: 2)),
+          returnDeadlineConfidence: DeadlineConfidence.confirmed,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      ];
 
-    expect(updated.ingredients.any((item) => item.name == 'rice'), isTrue);
-  });
-
-  test('planner scales ingredient quantities for larger households', () {
-    final state = seedPlannerState().copyWith(
-      preferences: seedPlannerState().preferences.copyWith(householdSize: 4),
-    );
-
-    final bundle = buildPlan(
-      preferences: state.preferences,
-      pantry: state.pantry,
-    );
-
-    final stirFry = bundle.meals.firstWhere(
-      (meal) => meal.templateId == 'chicken_stir_fry',
-    );
-    final chicken = stirFry.ingredients.firstWhere(
-      (item) => item.name == 'chicken',
-    );
-
-    expect(chicken.quantity, '2 lb');
-    expect(stirFry.rationale, contains('scaled for 4'));
-  });
+      expect(moneyAtRisk(orders, now), 140);
+    },
+  );
 }
